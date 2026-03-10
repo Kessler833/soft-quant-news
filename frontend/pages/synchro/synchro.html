@@ -1,23 +1,22 @@
 <div id="synchro-wrap" style="overflow-y:auto;height:100%;padding:20px 24px;">
-
   <div style="max-width:680px;margin:0 auto;">
 
+    <!-- Header -->
     <div style="margin-bottom:20px;">
       <div style="font-size:16px;font-weight:700;color:var(--accent-blue);margin-bottom:4px;">&#8857; Synchro &mdash; System Configuration</div>
-      <div style="font-size:12px;color:var(--text-muted);">API keys are stored locally in your browser (localStorage). They are never sent to any third party.</div>
+      <div style="font-size:12px;color:var(--text-muted);">API keys are stored locally in your browser. Never sent to third parties.</div>
     </div>
 
     <!-- System Status -->
-    <div style="margin-bottom:20px;">
+    <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">System Status</div>
       <div id="synchro-status-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
       <button id="synchro-check-btn" class="synchro-btn" style="margin-top:10px;">&#8635; Re-check All</button>
     </div>
 
     <!-- API Keys -->
-    <div style="margin-bottom:20px;">
+    <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">API Keys</div>
-
       <div class="synchro-field-group">
         <label class="synchro-label">Alpaca API Key</label>
         <input id="key-alpaca-key" class="synchro-input" type="text" placeholder="PK..."/>
@@ -27,8 +26,8 @@
         <input id="key-alpaca-secret" class="synchro-input" type="password" placeholder="&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;"/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Gemini API Key</label>
-        <input id="key-gemini" class="synchro-input" type="password" placeholder="AIza..."/>
+        <label class="synchro-label">Groq API Key <span style="font-size:10px;color:var(--text-muted);">(free at console.groq.com &mdash; 1000 req/day, 30 RPM)</span></label>
+        <input id="key-groq" class="synchro-input" type="password" placeholder="gsk_..."/>
       </div>
       <div class="synchro-field-group">
         <label class="synchro-label">Finnhub Key</label>
@@ -42,7 +41,6 @@
         <label class="synchro-label">Marketaux Token</label>
         <input id="key-marketaux" class="synchro-input" type="password" placeholder=""/>
       </div>
-
       <div style="display:flex;gap:10px;margin-top:14px;">
         <button id="synchro-save-btn" class="synchro-btn synchro-btn--primary">&#10003; Save &amp; Apply</button>
         <button id="synchro-clear-btn" class="synchro-btn">&#10005; Clear All Keys</button>
@@ -50,24 +48,62 @@
       <div id="synchro-save-msg" style="margin-top:8px;"></div>
     </div>
 
-    <!-- Backend Config -->
-    <div style="margin-bottom:20px;">
+    <!-- Groq Rate Limit Planner -->
+    <div style="margin-bottom:24px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Groq Rate Limit Planner</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;"
+           id="groq-cap-info">Groq free tier: <strong style="color:var(--text-primary);">1,000 req/day &middot; 30 RPM</strong></div>
+
+      <div class="synchro-field-group">
+        <label class="synchro-label">Daily ingest window &mdash; From</label>
+        <input id="rate-from" class="synchro-input" type="time" value="07:00" style="max-width:140px;"/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Daily ingest window &mdash; Until</label>
+        <input id="rate-until" class="synchro-input" type="time" value="22:00" style="max-width:140px;"/>
+      </div>
+
+      <div style="margin:10px 0;display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="rate-always-on" style="width:15px;height:15px;cursor:pointer;"/>
+        <label for="rate-always-on" style="font-size:12px;color:var(--text-primary);cursor:pointer;">
+          Always available &mdash; distribute requests evenly across the full 24 hours
+        </label>
+      </div>
+
+      <div id="rate-result" style="
+        margin-top:12px;padding:12px 14px;
+        background:var(--bg-panel);border:1px solid var(--border);
+        border-radius:6px;font-size:12px;line-height:1.8;
+      "></div>
+
+      <div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.6;">
+        The planner calculates the optimal ingest interval so your daily Groq quota lasts
+        exactly the full active window &mdash; with a <strong>15% buffer</strong> to absorb
+        bursts. Rule-based filtering always runs instantly regardless of Groq availability.
+        If Groq is rate-limited mid-cycle it falls back to rule-based automatically.
+      </div>
+
+      <button id="rate-apply-btn" class="synchro-btn synchro-btn--primary" style="margin-top:12px;">&#10003; Apply Schedule</button>
+    </div>
+
+    <!-- Backend URL -->
+    <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Backend URL</div>
       <div class="synchro-field-group">
         <label class="synchro-label">Base URL</label>
-        <input id="key-base-url" class="synchro-input" type="text" placeholder="http://localhost:8000" />
+        <input id="key-base-url" class="synchro-input" type="text" placeholder="http://localhost:8000"/>
       </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Default: http://localhost:8000 &mdash; change only if running backend on a different port.</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Default: http://localhost:8000</div>
     </div>
 
     <!-- Feed Stats -->
-    <div style="margin-bottom:20px;">
+    <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Feed Statistics</div>
       <div id="synchro-stats" style="font-size:12px;color:var(--text-muted);">Loading...</div>
     </div>
 
     <!-- Danger Zone -->
-    <div style="margin-bottom:20px;">
+    <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;color:var(--accent-red);">&#9888; Danger Zone</div>
       <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">Reset All Cached Settings</button>
       <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears localStorage. Does not affect backend database.</div>

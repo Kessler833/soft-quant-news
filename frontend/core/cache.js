@@ -1,4 +1,4 @@
-// QuantCache — LocalStorage manager (mirrors QuantTERMINAL_OS pattern)
+// QuantCache — LocalStorage manager
 const CACHE_KEY = 'QuantOS_Cache'
 
 const QuantCache = {
@@ -38,6 +38,16 @@ const QuantCache = {
     this.save(cached)
   },
 
+  saveRateSettings(settings) {
+    const cached = this.load()
+    cached.rateSettings = { ...(cached.rateSettings || {}), ...settings }
+    this.save(cached)
+  },
+
+  loadRateSettings() {
+    return (this.load() || {}).rateSettings || {}
+  },
+
   resetPartial() {
     const cached = this.load()
     delete cached.params
@@ -46,14 +56,9 @@ const QuantCache = {
   },
 
   resetFull() {
-    try {
-      localStorage.removeItem(CACHE_KEY)
-    } catch (e) {
-      console.warn('[QuantCache] resetFull error:', e)
-    }
+    try { localStorage.removeItem(CACHE_KEY) } catch (e) { console.warn('[QuantCache] resetFull error:', e) }
   },
 
-  // Watchlist helpers
   saveWatchlist(tickersArray) {
     const cached = this.load()
     cached.watchlist = tickersArray
@@ -64,7 +69,6 @@ const QuantCache = {
     return (this.load() || {}).watchlist || []
   },
 
-  // API key helpers
   loadApiKeys() {
     return (this.load() || {}).api || {}
   },
