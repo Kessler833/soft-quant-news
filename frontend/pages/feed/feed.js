@@ -5,6 +5,7 @@ let _feedRetryTimer = null
 let _feedSoundOn = true
 let _feedAudioCtx = null
 let _feedStatusEs = null
+let _feedRawEs = null
 
 function _feedGetFilters() {
   return {
@@ -42,7 +43,7 @@ function _feedHideBanner() {
   if (el) el.style.display = 'none'
 }
 
-// ── Ingest Status Bar ─────────────────────────────────────────────────────────
+// ── Status Bar ──────────────────────────────────────────────────────────────
 
 function _feedShowStatus(msg) {
   const bar     = document.getElementById('feed-status-bar')
@@ -50,33 +51,22 @@ function _feedShowStatus(msg) {
   const spinner = document.getElementById('feed-status-spinner')
   const badge   = document.getElementById('feed-status-badge')
   if (!bar) return
-
   const [phase, ...rest] = msg.split(':')
   const detail = rest.join(':').trim()
-
   const phaseColors = {
     fetching: 'var(--accent-blue)',
     scoring:  'var(--accent-orange)',
-    ai:       'var(--accent-purple)',
+    ai:       '#a9b1d6',
     done:     'var(--accent-green)',
     idle:     'var(--text-muted)',
     ping:     null,
   }
-
-  if (phase === 'ping') return  // keepalive, ignore
-
+  if (phase === 'ping') return
   const color = phaseColors[phase] || 'var(--text-muted)'
   bar.style.display = 'flex'
-  if (textEl) textEl.textContent = detail || msg
-  if (textEl) textEl.style.color = color
-  if (badge)  badge.textContent = phase.toUpperCase()
-  if (badge)  badge.style.borderColor = color
-  if (badge)  badge.style.color = color
-
-  // spinner only while active
+  if (textEl) { textEl.textContent = detail || msg; textEl.style.color = color }
+  if (badge)  { badge.textContent = phase.toUpperCase(); badge.style.borderColor = color; badge.style.color = color }
   if (spinner) spinner.style.display = (phase === 'done' || phase === 'idle') ? 'none' : 'inline-block'
-
-  // auto-hide after done/idle
   if (phase === 'done' || phase === 'idle') {
     setTimeout(() => { if (bar) bar.style.display = 'none' }, 6000)
   }
@@ -88,20 +78,67 @@ function _feedConnectStatusStream() {
     _feedStatusEs = new EventSource('http://localhost:8000/api/feed/ingest-status')
     _feedStatusEs.onmessage = (e) => {
       _feedShowStatus(e.data)
-      // If new articles were just saved, refresh the list
-      if (e.data.startsWith('done:')) {
-        setTimeout(_feedLoadAndRender, 500)
-      }
+      if (e.data.startsWith('done:')) setTimeout(_feedLoadAndRender, 500)
     }
-    _feedStatusEs.onerror = () => {
-      // SSE reconnects automatically — no action needed
-    }
-  } catch(e) {
-    console.warn('[feed] SSE status stream unavailable:', e)
-  }
+    _feedStatusEs.onerror = () => {}
+  } catch(e) { console.warn('[feed] Status SSE:', e) }
 }
 
-// ── Sound ─────────────────────────────────────────────────────────────────────
+// ── Raw News Panel ──────────────────────────────────────────────────────────
+
+function _feedConnectRawStream() {
+  if (_feedRawEs) { try { _feedRawEs.close() } catch(_){} }
+  try {
+    _feedRawEs = new EventSource('http://localhost:8000/api/feed/raw-stream')
+    _feedRawEs.onmessage = (e) => {
+      if (e.data === 'ping') return
+      try { _feedPrependRaw(JSON.parse(e.data)) } catch(_) {}
+    }
+    _feedRawEs.onerror = () => {}
+  } catch(e) { console.warn('[feed] Raw SSE:', e) }
+}
+
+function _feedPrependRaw(article) {
+  const list = document.getElementById('raw-list')
+  if (!list) return
+  const rel    = (article.relevance || 'ignore').toLowerCase()
+  const time   = article.published_at
+    ? new Date(article.published_at).toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'})
+    : '--:--'
+  const source = (article.source || '').substring(0, 12)
+  const title  = (article.title  || '').substring(0, 90)
+  const row = document.createElement('div')
+  row.className = `raw-row raw-row--${rel}`
+  row.title = article.title || ''
+  row.innerHTML = `<span class="raw-time">${time}</span><span class="raw-source">${_feedEsc(source)}</span><span class="raw-title">${_feedEsc(title)}</span>`
+  list.prepend(row)
+  while (list.children.length > 300) list.removeChild(list.lastChild)
+}
+
+// ── Keyword Status ──────────────────────────────────────────────────────────
+
+async function _feedLoadKeywordStatus() {
+  try {
+    const s = await apiFeedKeywordStatus()
+    const lastEl    = document.getElementById('filter-last-update')
+    const nextEl    = document.getElementById('filter-next-update')
+    const countEl   = document.getElementById('filter-kw-counts')
+    const contextEl = document.getElementById('filter-context')
+    if (lastEl) lastEl.textContent = s.generated_at ? `Last update: ${_feedRelTime(s.generated_at)}` : 'Last update: never'
+    if (nextEl) {
+      if (s.next_at) {
+        const diff = new Date(s.next_at) - Date.now()
+        nextEl.textContent = diff > 0 ? `Next: in ${Math.round(diff / 60000)}min` : 'Next: overdue'
+      } else {
+        nextEl.textContent = 'Next: pending'
+      }
+    }
+    if (countEl)   countEl.textContent   = s.high_count ? `H:${s.high_count} M:${s.medium_count} L:${s.low_count} keywords` : ''
+    if (contextEl) contextEl.textContent = s.context_note || ''
+  } catch(_) {}
+}
+
+// ── Sound ───────────────────────────────────────────────────────────────────
 
 function _feedPlaySound(relevance) {
   if (!_feedSoundOn) return
@@ -110,18 +147,13 @@ function _feedPlaySound(relevance) {
     const ctx = _feedAudioCtx
     const osc = ctx.createOscillator()
     const gain = ctx.createGain()
-    osc.connect(gain)
-    gain.connect(ctx.destination)
+    osc.connect(gain); gain.connect(ctx.destination)
     if (relevance === 'HIGH') {
-      osc.frequency.value = 880
-      gain.gain.value = 0.15
-      osc.start()
-      osc.stop(ctx.currentTime + 0.25)
+      osc.frequency.value = 880; gain.gain.value = 0.15
+      osc.start(); osc.stop(ctx.currentTime + 0.25)
     } else {
-      osc.frequency.value = 440
-      gain.gain.value = 0.08
-      osc.start()
-      osc.stop(ctx.currentTime + 0.15)
+      osc.frequency.value = 440; gain.gain.value = 0.08
+      osc.start(); osc.stop(ctx.currentTime + 0.15)
     }
   } catch (_) {}
 }
@@ -129,27 +161,20 @@ function _feedPlaySound(relevance) {
 // ── Card builder ──────────────────────────────────────────────────────────────
 
 function _feedBuildCard(a, withChartBtn = true) {
-  const rel     = (a.relevance || 'MEDIUM').toLowerCase()
+  const rel     = (a.relevance || 'low').toLowerCase()
   const sent    = (a.sentiment || 'Neutral').toLowerCase()
   const tickers = _feedParseTickers(a.tickers)
-  const impact  = Math.min(10, Math.max(1, a.impact_score || 5))
-
-  const tickerChips = tickers.map(t =>
-    `<span class="ticker-chip" data-ticker="${t}">${t}</span>`
-  ).join('')
-
+  const impact  = Math.min(10, Math.max(1, a.impact_score || 2))
+  const tickerChips = tickers.map(t => `<span class="ticker-chip" data-ticker="${t}">${t}</span>`).join('')
   const chartBtns = withChartBtn
-    ? tickers.slice(0, 2).map(t =>
-        `<button class="feed-card-chart-btn" data-ticker="${t}">&#9654; ${t}</button>`
-      ).join('')
+    ? tickers.slice(0, 2).map(t => `<button class="feed-card-chart-btn" data-ticker="${t}">&#9654; ${t}</button>`).join('')
     : ''
-
   const card = document.createElement('div')
   card.className = `news-card news-card--${rel} slide-in`
   card.dataset.id = a.id || ''
   card.innerHTML = `
     <div class="news-card__header">
-      <span class="badge badge--${rel}">${a.relevance || 'MED'}</span>
+      <span class="badge badge--${rel}">${a.relevance || 'LOW'}</span>
       <span class="badge badge--${sent}">${a.sentiment || 'Neutral'}</span>
       ${a.catalyst_type ? `<span class="badge badge--catalyst">${a.catalyst_type}</span>` : ''}
       <div class="impact-bar" title="Impact ${impact}/10">
@@ -163,13 +188,10 @@ function _feedBuildCard(a, withChartBtn = true) {
       <div class="news-card__tickers">${tickerChips}</div>
       <span class="news-card__source">${_feedEsc(a.source || '')}</span>
       <span class="news-card__time">${_feedRelTime(a.published_at)}</span>
-    </div>
-  `
-
+    </div>`
   card.querySelectorAll('.feed-card-chart-btn').forEach(btn => {
     btn.addEventListener('click', () => _feedOpenChart(btn.dataset.ticker))
   })
-
   return card
 }
 
@@ -180,9 +202,7 @@ function _feedPrependCard(article) {
   const card = _feedBuildCard(article)
   list.prepend(card)
   _feedPlaySound(article.relevance)
-  while (list.children.length > 200) {
-    list.removeChild(list.lastChild)
-  }
+  while (list.children.length > 200) list.removeChild(list.lastChild)
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -191,10 +211,7 @@ function _feedConnectWs() {
   if (_feedRetryTimer) { clearTimeout(_feedRetryTimer); _feedRetryTimer = null }
   try {
     _feedWs = new WebSocket('ws://localhost:8000/ws/feed')
-    _feedWs.onopen = () => {
-      _feedRetryCount = 0
-      _feedHideBanner()
-    }
+    _feedWs.onopen = () => { _feedRetryCount = 0; _feedHideBanner() }
     _feedWs.onmessage = (e) => {
       try {
         const article = JSON.parse(e.data)
@@ -211,9 +228,7 @@ function _feedConnectWs() {
         _feedShowBanner('Feed disconnected. Refresh to reconnect.')
       }
     }
-  } catch (e) {
-    console.warn('[feed] WS connect error:', e)
-  }
+  } catch (e) { console.warn('[feed] WS error:', e) }
 }
 
 // ── Load & render ─────────────────────────────────────────────────────────────
@@ -232,10 +247,9 @@ async function _feedLoadAndRender() {
     const articles = await apiFeedLatest(params)
     list.innerHTML = ''
     if (!articles || articles.length === 0) {
-      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:16px;">No articles yet — ingest is running, check the status bar above.</div>'
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:16px;">No articles yet — check the status bar above.</div>'
       return
     }
-    // Backend already returns DESC (newest first) — prepend so newest is at top
     articles.forEach(a => list.appendChild(_feedBuildCard(a)))
   } catch (e) {
     list.innerHTML = `<div class="notification notification--error">Error: ${e.message}</div>`
@@ -249,16 +263,12 @@ async function _feedOpenChart(ticker) {
   const title     = document.getElementById('feed-chart-title')
   const container = document.getElementById('feed-chart-container')
   if (!modal || !container) return
-
   title.textContent = `${ticker} — 5Min Candlestick`
   modal.classList.add('open')
   container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;gap:10px;color:var(--text-muted);"><div class="spinner"></div> Loading chart...</div>'
-
   try {
     const bars = await apiPriceBars(ticker, '5Min', 100)
-
-    // Handle API-level errors (Alpaca not configured, symbol issues, etc.)
-    if (!bars || (bars.error)) {
+    if (!bars || bars.error) {
       const errMsg = bars?.error || 'No data returned'
       const isKeyIssue = errMsg.toLowerCase().includes('not configured') || errMsg.toLowerCase().includes('key')
       container.innerHTML = `
@@ -268,12 +278,10 @@ async function _feedOpenChart(ticker) {
         </div>`
       return
     }
-
     if (bars.length === 0) {
-      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">No 5-min bars available for this symbol. Market may be closed or symbol is not on IEX feed.</div>'
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">No 5-min bars available. Market may be closed or symbol not on IEX feed.</div>'
       return
     }
-
     const trace = {
       type: 'candlestick',
       x:    bars.map(b => b.t),
@@ -320,7 +328,15 @@ async function initFeed() {
   if (_feedInitDone) return
   _feedInitDone = true
 
+  try {
+    Split(['#feed-main', '#feed-raw'], { sizes: [80, 20], gutterSize: 5, minSize: [400, 180] })
+  } catch(e) { console.warn('[feed] Split.js error:', e) }
+
   _feedConnectStatusStream()
+  _feedConnectRawStream()
+  _feedLoadKeywordStatus()
+  setInterval(_feedLoadKeywordStatus, 60000)
+
   await _feedLoadAndRender()
   _feedConnectWs()
 
@@ -339,6 +355,20 @@ async function initFeed() {
       _feedSoundOn = !_feedSoundOn
       soundBtn.textContent = _feedSoundOn ? '\u266a Sound ON' : '\u266a Sound OFF'
       soundBtn.classList.toggle('active', _feedSoundOn)
+    })
+  }
+
+  const updateBtn = document.getElementById('filter-update-btn')
+  if (updateBtn) {
+    updateBtn.addEventListener('click', async () => {
+      updateBtn.disabled = true
+      updateBtn.textContent = '\u21bb Updating...'
+      try { await apiFeedRefreshKeywords() } catch(_) {}
+      setTimeout(async () => {
+        await _feedLoadKeywordStatus()
+        updateBtn.disabled = false
+        updateBtn.textContent = '\u21bb Update Filter Now'
+      }, 3000)
     })
   }
 
