@@ -1,0 +1,17 @@
+{
+  "name": "soft-quant-news",
+  "version": "1.0.0",
+  "description": "Institutional-grade AI trading news terminal",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "split.js": "^1.6.5"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^24.0.0"
+  }
+}
