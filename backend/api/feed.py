@@ -13,7 +13,7 @@ from data import config, db
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_gemini_sem = asyncio.Semaphore(5)
+_gemini_sem = asyncio.Semaphore(1)
 
 RSS_FEEDS = [
     'https://rss.forexlive.com',
@@ -28,7 +28,7 @@ async def _get_gemini_model():
     import google.generativeai as genai
     key = config.get('gemini_key', '')
     if key:
-        genai.configure(api_key=key)  # configure at call-time, not import-time
+        genai.configure(api_key=key)
     try:
         return genai.GenerativeModel('gemini-2.0-flash')
     except Exception:
@@ -66,12 +66,12 @@ Input (JSON array of {{id, title, source}}):
 
 Return ONLY valid JSON array. No markdown. No explanation."""
 
-    backoff = [2, 4, 8]
+    backoff = [5, 15, 30]
     async with _gemini_sem:
         for attempt, delay in enumerate(backoff + [None]):
             try:
                 model = await _get_gemini_model()
-                loop = asyncio.get_running_loop()  # fix: get_running_loop not get_event_loop
+                loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
                     None,
                     lambda: model.generate_content(prompt)
@@ -217,7 +217,7 @@ async def _fetch_benzinga(key: str) -> list:
 async def _fetch_rss(url: str) -> list:
     try:
         import feedparser
-        loop = asyncio.get_running_loop()  # fix: get_running_loop
+        loop = asyncio.get_running_loop()
         feed = await loop.run_in_executor(None, feedparser.parse, url)
         results = []
         for entry in feed.entries:
@@ -239,7 +239,6 @@ async def _fetch_rss(url: str) -> list:
 
 
 async def _empty_list() -> list:
-    """Async no-op placeholder — replaces deprecated asyncio.coroutine pattern."""
     return []
 
 
@@ -255,7 +254,6 @@ async def ingest_all_sources() -> None:
 
     watchlist_tickers = db.get_watchlist()
 
-    # Fix: use _empty_list() coroutine instead of deprecated asyncio.coroutine()
     tasks = [
         _fetch_finnhub_general(finnhub_key) if finnhub_key else _empty_list()
     ]
@@ -287,10 +285,15 @@ async def ingest_all_sources() -> None:
 
     logger.info(f'[feed] Processing {len(new_articles)} new articles through Gemini...')
 
-    batch_size = 15
+    # Cap first-run at 30 articles to avoid rate limit storm
+    new_articles = new_articles[:30]
+
+    batch_size = 10
     batches = [new_articles[i:i+batch_size] for i in range(0, len(new_articles), batch_size)]
 
-    for batch in batches:
+    for i, batch in enumerate(batches):
+        if i > 0:
+            await asyncio.sleep(6)  # 6s between batches — safe for free tier (10 RPM)
         gemini_results = await gemini_filter_batch(batch)
         gemini_map = {g['id']: g for g in gemini_results if isinstance(g, dict)}
 
@@ -317,7 +320,6 @@ async def ingest_all_sources() -> None:
 
 
 def _schedule_drift(article_id: str, ticker: str) -> None:
-    """Schedule price drift checks at +5m, +15m, +30m via APScheduler."""
     try:
         from backend.main import scheduler
         now = datetime.now(timezone.utc)
@@ -337,7 +339,6 @@ def _schedule_drift(article_id: str, ticker: str) -> None:
 
 
 async def _track_drift(article_id: str, ticker: str, minutes: int) -> None:
-    """Store price at given minutes offset. Uses db.save_drift() — no direct lock access."""
     try:
         from backend.api.prices import get_quote_price
         price = await get_quote_price(ticker)
@@ -348,7 +349,7 @@ async def _track_drift(article_id: str, ticker: str, minutes: int) -> None:
         logger.warning(f'[feed] Drift track error ({ticker} +{minutes}m): {e}')
 
 
-# ─── Routes ──────────────────────────────────────────────────────────────────
+# ─── Routes ─────────────────────────────────────────────────────────────────────────────
 
 @router.get('/latest')
 async def get_latest(
