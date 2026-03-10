@@ -239,11 +239,11 @@ Return ONLY a valid JSON array. No markdown."""
     async with _groq_sem:
         for attempt, delay in enumerate(backoff + [None]):
             try:
-                async with httpx.AsyncClient(timeout=20) as client:
+                async with httpx.AsyncClient(timeout=30) as client:
                     r = await client.post(
                         'https://api.groq.com/openai/v1/chat/completions',
                         headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
-                        json={'model': 'llama-3.1-8b-instant', 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.1, 'max_tokens': 1536}
+                        json={'model': 'llama-3.3-70b-versatile', 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.1, 'max_tokens': 2048}
                     )
                 if r.status_code == 429:
                     if delay:
@@ -308,7 +308,7 @@ Return ONLY a valid JSON array. No markdown."""
                     'model': local_model,
                     'messages': [{'role': 'user', 'content': prompt}],
                     'temperature': 0.1,
-                    'max_tokens': 1536,
+                    'max_tokens': 2048,
                 },
             )
             r.raise_for_status()

@@ -70,5 +70,6 @@ async function apiAiPremarketBrief()  { return _get('/api/ai/premarket-brief') }
 async function apiAiMacroNarrative()  { return _get('/api/ai/macro-narrative') }
 async function apiAiChat(question, contextHours = 4) { return _post('/api/ai/chat', { question, context_hours: contextHours }) }
 async function apiAiBullBear(ticker)  { return _post('/api/ai/bull-bear', { ticker }) }
+async function apiResetCache() { return _post('/api/health/reset-cache', {}) }
 async function apiFeedKeywordStatus() { return _get('/api/feed/keyword-status') }
 async function apiFeedRefreshKeywords() { return _post('/api/feed/refresh-keywords', {}) }

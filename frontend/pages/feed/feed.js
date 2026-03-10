@@ -125,6 +125,9 @@ function _feedSetKwLoading(on) {
   if (el) el.classList.toggle('visible', on)
 }
 
+let _feedKwPollCount = 0
+const _FEED_KW_MAX_POLLS = 6
+
 async function _feedLoadKeywordStatus() {
   try {
     const s = await apiFeedKeywordStatus()
@@ -134,14 +137,25 @@ async function _feedLoadKeywordStatus() {
     const contextEl = document.getElementById('filter-context')
 
     if (!s.generated_at) {
-      _feedSetKwLoading(true)
-      if (lastEl)  lastEl.textContent  = 'Last update: generating...'
-      if (nextEl)  nextEl.textContent  = 'Next: —'
-      if (countEl) countEl.textContent = ''
-      setTimeout(_feedLoadKeywordStatus, 5000)
+      // No keywords exist yet
+      _feedKwPollCount++
+      if (_feedKwPollCount <= _FEED_KW_MAX_POLLS) {
+        _feedSetKwLoading(true)
+        if (lastEl)  lastEl.textContent  = 'Waiting for first keyword generation...'
+        if (nextEl)  nextEl.textContent  = ''
+        if (countEl) countEl.textContent = ''
+        setTimeout(_feedLoadKeywordStatus, 5000)
+      } else {
+        _feedSetKwLoading(false)
+        if (lastEl)  lastEl.textContent  = 'No keywords yet — click Update Filter Now'
+        if (nextEl)  nextEl.textContent  = ''
+        if (countEl) countEl.textContent = ''
+      }
       return
     }
 
+    // Keywords exist — stop polling, hide spinner
+    _feedKwPollCount = 0
     _feedSetKwLoading(false)
     if (lastEl) lastEl.textContent = `Last update: ${_feedRelTime(s.generated_at)}`
     if (nextEl) {
@@ -151,7 +165,12 @@ async function _feedLoadKeywordStatus() {
     if (countEl)   countEl.textContent   = s.high_count ? `H:${s.high_count} M:${s.medium_count} L:${s.low_count} keywords` : ''
     if (contextEl) contextEl.textContent = s.context_note || ''
   } catch(e) {
-    setTimeout(_feedLoadKeywordStatus, 5000)
+    _feedKwPollCount++
+    if (_feedKwPollCount <= _FEED_KW_MAX_POLLS) {
+      setTimeout(_feedLoadKeywordStatus, 5000)
+    } else {
+      _feedSetKwLoading(false)
+    }
   }
 }
 

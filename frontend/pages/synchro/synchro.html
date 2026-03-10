@@ -51,8 +51,15 @@
     <!-- Local LLM -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Local LLM <span style="font-size:10px;color:var(--text-muted);">(Ollama / LM Studio / llama.cpp)</span></div>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">
-        Run AI news grading locally instead of using Groq cloud. Requires an OpenAI-compatible server running on your machine.
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.6;">
+        Run AI news grading locally instead of using Groq cloud.<br>
+        <strong style="color:var(--text-primary);">Quick setup:</strong>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;">
+          1. Install <a href="https://ollama.com" style="color:var(--accent-blue);" target="_blank">Ollama</a>
+          &nbsp;→&nbsp; 2. Run: ollama pull llama3.1:8b
+          &nbsp;→&nbsp; 3. Set URL below to http://localhost:11434
+        </span>
+        <br><span style="font-size:11px;">For best accuracy matching Groq, use <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;">llama3.3:70b</code> (requires ~40GB RAM) or <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;">llama3.1:8b</code> (requires ~5GB RAM).</span>
       </div>
       <div class="synchro-field-group">
         <label class="synchro-label">Local LLM URL</label>
@@ -112,8 +119,10 @@
     <!-- Danger Zone -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;color:var(--accent-red);">&#9888; Danger Zone</div>
-      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">Reset All Cached Settings</button>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears localStorage. Does not affect backend database.</div>
+      <button id="synchro-soft-reset-btn" class="synchro-btn synchro-btn--danger" style="margin-bottom:8px;">⟳ Reset Article Cache</button>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">Clears all articles, AI cache, and keywords from the database. Preserves watchlist and API keys.</div>
+      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">⚠ Full Reset (includes API keys)</button>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears ALL browser data including API keys. You will need to re-enter all keys.</div>
     </div>
 
   </div>

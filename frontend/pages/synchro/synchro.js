@@ -20,6 +20,7 @@ async function initSynchro() {
   document.getElementById('synchro-clear-btn')?.addEventListener('click',       _synchroClearKeys)
   document.getElementById('synchro-check-btn')?.addEventListener('click',       _synchroCheckAll)
   document.getElementById('synchro-reset-cache-btn')?.addEventListener('click', _synchroResetCache)
+  document.getElementById('synchro-soft-reset-btn')?.addEventListener('click', _synchroSoftReset)
   document.getElementById('rate-apply-btn')?.addEventListener('click',          _rateApply)
   document.getElementById('rate-from')?.addEventListener('input',               _rateCalcUpdate)
   document.getElementById('rate-until')?.addEventListener('input',              _rateCalcUpdate)
@@ -307,6 +308,16 @@ async function _synchroLoadStats() {
 }
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
+
+async function _synchroSoftReset() {
+  if (!confirm('Clear all articles, AI cache, and keywords? Watchlist and API keys will be preserved.')) return
+  try {
+    await apiResetCache()
+    _synchroShowSaveMsg('✓ Article cache cleared. Restart to re-ingest.', 'success')
+  } catch (e) {
+    _synchroShowSaveMsg(`Reset failed: ${e.message}`, 'error')
+  }
+}
 
 function _synchroResetCache() {
   if (!confirm('Reset all cached settings?')) return

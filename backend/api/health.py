@@ -146,6 +146,14 @@ async def post_health(payload: KeysPayload):
     return {'status': 'ok', 'validated': validated}
 
 
+@router.post('/health/reset-cache')
+async def reset_cache():
+    """Soft reset: clear article cache, AI data, keywords. Preserves watchlist and API keys."""
+    db.reset_article_cache()
+    logger.info('[health] Article cache reset by user.')
+    return {'status': 'ok', 'message': 'Cache cleared. Watchlist and API keys preserved.'}
+
+
 @router.get('/health')
 async def get_health():
     return {'status': 'ok'}
