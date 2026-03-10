@@ -24,10 +24,11 @@ async def lifespan(application: FastAPI):
     from backend.api.analysis import generate_macro_narrative
     from backend.api.ai_routes import generate_premarket_brief
 
-    scheduler.add_job(ingest_all_sources,      'interval', seconds=60,   id='ingest')
-    scheduler.add_job(update_polymarket,        'interval', seconds=300,  id='polymarket')
-    scheduler.add_job(generate_macro_narrative, 'interval', seconds=1800, id='macro_narrative')
-    scheduler.add_job(refresh_keywords,         'interval', hours=6,     id='keyword_refresh')
+    # Scheduler: keyword refresh uses force=False so it respects the 6h age check
+    scheduler.add_job(ingest_all_sources,                        'interval', seconds=60,   id='ingest')
+    scheduler.add_job(update_polymarket,                         'interval', seconds=300,  id='polymarket')
+    scheduler.add_job(generate_macro_narrative,                  'interval', seconds=1800, id='macro_narrative')
+    scheduler.add_job(refresh_keywords,                          'interval', hours=6,      id='keyword_refresh', kwargs={'force': False})
     scheduler.add_job(generate_premarket_brief, 'cron', hour=7, minute=0, timezone='UTC', id='premarket_brief')
     scheduler.start()
     logger.info('[main] Scheduler started.')
@@ -35,6 +36,12 @@ async def lifespan(application: FastAPI):
     import asyncio
     async def _startup_tasks():
         logger.info('[main] Running startup tasks...')
+
+        # Keywords first — force=True so it always runs immediately on startup
+        # regardless of whether there is stale cached data or none at all
+        try: await refresh_keywords(force=True)
+        except Exception as e: logger.warning(f'[main] Startup keywords: {e}')
+
         try: await ingest_all_sources()
         except Exception as e: logger.warning(f'[main] Startup ingest: {e}')
 
@@ -43,9 +50,6 @@ async def lifespan(application: FastAPI):
 
         try: await generate_macro_narrative()
         except Exception as e: logger.warning(f'[main] Startup macro: {e}')
-
-        try: await refresh_keywords()
-        except Exception as e: logger.warning(f'[main] Startup keywords: {e}')
 
         if not db.get_ai_cache('premarket_brief'):
             try: await generate_premarket_brief()

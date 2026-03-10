@@ -118,22 +118,32 @@ def rule_score(article: dict) -> dict:
     return {'relevance': relevance, 'sentiment': sentiment, 'impact_score': impact, 'catalyst_type': catalyst}
 
 
-# ── Keyword refresh ──────────────────────────────────────────────────────────
+# ── Keyword refresh ───────────────────────────────────────────────────────
 
-async def refresh_keywords() -> None:
+async def refresh_keywords(force: bool = False) -> None:
+    """Generate fresh AI keywords.
+    force=True  → always run immediately (startup with no cache, manual button).
+    force=False → skip if cache is less than 6 hours old (scheduler tick).
+    """
     groq_key = config.get('groq_key', '')
     if not groq_key:
         logger.warning('[feed] No Groq key — skipping keyword refresh.')
         return
-    kw = db.get_latest_keywords()
-    if kw and kw.get('generated_at'):
-        try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(kw['generated_at'].replace('Z', '+00:00'))).total_seconds()
-            if age < 21600:
-                logger.info(f'[feed] Keywords fresh ({int(age/3600)}h old), skipping refresh.')
-                return
-        except Exception:
-            pass
+
+    if not force:
+        kw = db.get_latest_keywords()
+        if kw and kw.get('generated_at'):
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                    kw['generated_at'].replace('Z', '+00:00'))).total_seconds()
+                if age < 21600:
+                    logger.info(f'[feed] Keywords fresh ({int(age/3600)}h old), skipping refresh.')
+                    return
+            except Exception:
+                pass
+
+    logger.info(f'[feed] Requesting keyword refresh (force={force})...')
+    _emit_status('ai: Generating market-aware filter keywords...')
 
     prompt = """You are a financial news filter for a US equity day trader.
 Based on CURRENT macro market conditions (consider Fed policy stance, active earnings season, geopolitical tensions, sector rotations happening right now), generate keyword lists for filtering financial news headlines.
@@ -154,7 +164,12 @@ Be specific to current market themes, not just generic finance words."""
             r = await client.post(
                 'https://api.groq.com/openai/v1/chat/completions',
                 headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
-                json={'model': 'llama-3.3-70b-versatile', 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.3, 'max_tokens': 1024}
+                json={
+                    'model': 'llama-3.3-70b-versatile',
+                    'messages': [{'role': 'user', 'content': prompt}],
+                    'temperature': 0.3,
+                    'max_tokens': 1024,
+                }
             )
             r.raise_for_status()
             text = r.json()['choices'][0]['message']['content'].strip()
@@ -162,10 +177,17 @@ Be specific to current market themes, not just generic finance words."""
                 text = re.sub(r'^```[a-z]*\n?', '', text)
                 text = re.sub(r'```$', '', text).strip()
             parsed = json.loads(text)
-            db.save_keywords(parsed.get('high', []), parsed.get('medium', []), parsed.get('low', []), parsed.get('context_note', ''))
-            _cached_kw['_loaded_at'] = None
+            db.save_keywords(
+                parsed.get('high', []),
+                parsed.get('medium', []),
+                parsed.get('low', []),
+                parsed.get('context_note', ''),
+            )
+            _cached_kw['_loaded_at'] = None  # bust in-memory cache
+            _emit_status('done: Filter keywords updated — AI context applied')
             logger.info('[feed] Keywords refreshed from Groq.')
     except Exception as e:
+        _emit_status('idle: Keyword refresh failed — using base keywords')
         logger.error(f'[feed] Keyword refresh error: {e}')
 
 
@@ -489,7 +511,8 @@ async def keyword_status():
 
 @router.post('/refresh-keywords')
 async def trigger_refresh_keywords():
-    asyncio.create_task(refresh_keywords())
+    # Always force-run immediately, don't respect the 6h cache
+    asyncio.create_task(refresh_keywords(force=True))
     return {'status': 'generating'}
 
 
