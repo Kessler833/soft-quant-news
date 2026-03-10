@@ -1,0 +1,133 @@
+#page-watchlist {
+  flex-direction: row;
+  overflow: hidden;
+}
+
+#wl-left,
+#wl-right {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.wl-input {
+  flex: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--bg-tertiary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+  text-transform: uppercase;
+}
+.wl-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.wl-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--bg-tertiary);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.wl-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+}
+.wl-btn--primary {
+  color: var(--accent-blue);
+  border-color: rgba(122,162,247,0.5);
+}
+
+.wl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 5px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border: 1px solid transparent;
+}
+.wl-item:hover {
+  background: var(--bg-tertiary);
+}
+.wl-item.selected {
+  background: rgba(122,162,247,0.1);
+  border-color: rgba(122,162,247,0.3);
+}
+.wl-item-ticker {
+  color: var(--accent-blue);
+  font-weight: 600;
+  font-size: 14px;
+}
+.wl-item-quote {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.wl-remove-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: inherit;
+  transition: color 0.15s;
+}
+.wl-remove-btn:hover {
+  color: var(--accent-red);
+}
+
+/* Detail panel */
+.wl-detail-ticker {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent-blue);
+  margin-bottom: 4px;
+}
+.wl-detail-price {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+.wl-bull-bear {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.wl-case-box {
+  background: var(--bg-secondary);
+  border: 1px solid var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.wl-case-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.wl-case-point {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 3px 0;
+  line-height: 1.4;
+}
+.wl-case-point::before {
+  content: '\2022 ';
+  color: inherit;
+}

@@ -1,0 +1,130 @@
+#page-analysis {
+  flex-direction: row;
+  overflow: hidden;
+}
+#analysis-left,
+#analysis-center,
+#analysis-right {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Gauge */
+.gauge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0 8px;
+}
+.gauge-svg { overflow: visible; }
+.gauge-score {
+  font-size: 26px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.gauge-label {
+  font-size: 11px;
+  text-anchor: middle;
+  fill: var(--text-muted);
+}
+
+/* Velocity */
+.velocity-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 6px 0 12px;
+  border-bottom: 1px solid var(--bg-tertiary);
+  margin-bottom: 10px;
+}
+
+/* Per-ticker bars */
+.ticker-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.ticker-bar-label {
+  width: 52px;
+  color: var(--accent-blue);
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.ticker-bar-bg {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.ticker-bar-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+.ticker-bar-score {
+  width: 40px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* WSB */
+.wsb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+  font-size: 12px;
+}
+.wsb-row:last-child { border-bottom: none; }
+
+/* Heatmap */
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.heatmap-cell {
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--bg-tertiary);
+  transition: border-color 0.2s;
+}
+.heatmap-cell-name {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.heatmap-cell-score {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* Narrative */
+.narrative-body {
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+.narrative-regime {
+  display: inline-block;
+  margin-bottom: 12px;
+}

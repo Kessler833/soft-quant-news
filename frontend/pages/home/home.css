@@ -1,0 +1,101 @@
+#page-home {
+  flex-direction: row;
+  overflow: hidden;
+}
+
+#home-left,
+#home-right {
+  height: 100%;
+  overflow: hidden;
+}
+
+#home-left {
+  overflow-y: auto;
+}
+
+#home-right {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Brief section */
+#home-brief-body .brief-bias {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+}
+
+#home-brief-body .brief-rationale {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+#home-brief-body .brief-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  margin-top: 12px;
+}
+
+#home-brief-body .brief-catalyst-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+  font-size: 12px;
+}
+
+#home-brief-body .brief-catalyst-row:last-child {
+  border-bottom: none;
+}
+
+/* Polymarket */
+.poly-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+  font-size: 12px;
+}
+.poly-row:last-child {
+  border-bottom: none;
+}
+.poly-question {
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+.poly-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.poly-bar-bg {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.poly-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent-blue);
+  transition: width 0.4s ease;
+}
+.poly-pct {
+  color: var(--accent-blue);
+  font-weight: 600;
+  width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.poly-delta-pos { color: var(--accent-green); font-size: 11px; }
+.poly-delta-neg { color: var(--accent-red);   font-size: 11px; }
