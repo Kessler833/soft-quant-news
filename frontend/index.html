@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>soft-quant-news</title>
+
+  <link rel="stylesheet" href="core/base.css" />
+  <link rel="stylesheet" href="core/components.css" />
+  <link rel="stylesheet" href="pages/home/home.css" />
+  <link rel="stylesheet" href="pages/feed/feed.css" />
+  <link rel="stylesheet" href="pages/analysis/analysis.css" />
+  <link rel="stylesheet" href="pages/watchlist/watchlist.css" />
+  <link rel="stylesheet" href="pages/calendar/calendar.css" />
+  <link rel="stylesheet" href="pages/ai/ai.css" />
+  <link rel="stylesheet" href="pages/synchro/synchro.css" />
+</head>
+<body>
+
+  <div id="sidebar">
+    <div id="logo">&#9672; soft-quant-news</div>
+    <nav id="nav">
+      <div class="nav-item active" data-page="home">&#9672; Home</div>
+      <div class="nav-item" data-page="feed">&#11041; Feed</div>
+      <div class="nav-item" data-page="analysis">&#9635; Analysis</div>
+      <div class="nav-item" data-page="watchlist">&#9678; Watchlist</div>
+      <div class="nav-item" data-page="calendar">&#9783; Calendar</div>
+      <div class="nav-item" data-page="ai">&#10022; AI</div>
+      <div class="nav-item" data-page="synchro">&#8857; Synchro</div>
+    </nav>
+  </div>
+
+  <div id="main-content">
+    <div id="page-home"      class="page active"></div>
+    <div id="page-feed"      class="page"></div>
+    <div id="page-analysis"  class="page"></div>
+    <div id="page-watchlist" class="page"></div>
+    <div id="page-calendar"  class="page"></div>
+    <div id="page-ai"        class="page"></div>
+    <div id="page-synchro"   class="page"></div>
+  </div>
+
+  <script src="../node_modules/split.js/dist/split.js"></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="core/cache.js"></script>
+  <script src="core/router.js"></script>
+  <script src="core/api.js"></script>
+  <script src="core/symbols.js"></script>
+  <script src="pages/home/home.js"></script>
+  <script src="pages/feed/feed.js"></script>
+  <script src="pages/analysis/analysis.js"></script>
+  <script src="pages/watchlist/watchlist.js"></script>
+  <script src="pages/calendar/calendar.js"></script>
+  <script src="pages/ai/ai.js"></script>
+  <script src="pages/synchro/synchro.js"></script>
+  <script src="core/app.js"></script>
+</body>
+</html>
