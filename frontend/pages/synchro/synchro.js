@@ -25,8 +25,42 @@ async function initSynchro() {
   document.getElementById('rate-until')?.addEventListener('input',              _rateCalcUpdate)
   document.getElementById('rate-always-on')?.addEventListener('change',         _rateCalcUpdate)
 
+  // Auto-push saved keys to backend on every launch so config is never empty
+  await _synchroPushKeysToBackend()
+
   await _synchroCheckAll()
   _synchroLoadStats()
+}
+
+// Push whatever is in QuantCache to the backend immediately.
+// This ensures keys are available even if the user never clicks Save.
+async function _synchroPushKeysToBackend() {
+  const keys = QuantCache.loadApiKeys()
+  const rate = QuantCache.loadRateSettings()
+  // Only push if at least one key is saved
+  const hasAnyKey = Object.values(keys).some(v => v && String(v).trim().length > 0)
+  if (!hasAnyKey) return
+  try {
+    await apiHealth({
+      ...keys,
+      groq_rpm:            rate.groqRpm     || 25,
+      ingest_interval_sec: rate.intervalSec || 90,
+    })
+    console.log('[synchro] Keys auto-pushed to backend on launch.')
+  } catch (e) {
+    console.warn('[synchro] Auto-push failed (backend may still be starting):', e.message)
+    // Retry once after 3s in case backend was still booting
+    setTimeout(async () => {
+      try {
+        await apiHealth({
+          ...keys,
+          groq_rpm:            rate.groqRpm     || 25,
+          ingest_interval_sec: rate.intervalSec || 90,
+        })
+        console.log('[synchro] Keys auto-pushed to backend (retry ok).')
+      } catch (_) {}
+    }, 3000)
+  }
 }
 
 function _synchroLoadFields() {
@@ -47,37 +81,26 @@ function _synchroLoadFields() {
   }
 }
 
-// ── Rate Limit Calculator (all APIs) ──────────────────────────────────────────
+// ── Rate Limit Calculator ─────────────────────────────────────────────────────
 
 function _calcApiStats(cap, activeMinutes) {
   const BUFFER = 0.85
-
-  // Effective RPM limit
   const safeRpm = cap.rpm ? Math.floor(cap.rpm * BUFFER) : null
-  // Effective RPD limit
   const safeRpd = cap.rpd ? Math.floor(cap.rpd * BUFFER) : null
-
   let intervalSec
   if (safeRpd) {
-    // space requests evenly over active window to hit budget
     intervalSec = Math.ceil((activeMinutes * 60) / safeRpd)
   } else {
-    // no daily cap — use RPM alone
     intervalSec = Math.ceil(60 / safeRpm)
   }
-
-  // Never faster than RPM allows
   if (safeRpm) {
     intervalSec = Math.max(intervalSec, Math.ceil(60 / safeRpm))
   }
-
   const reqPerDay  = Math.floor((activeMinutes * 60) / intervalSec)
   const reqPerHour = Math.floor(3600 / intervalSec)
-
   const hh = String(Math.floor(intervalSec / 60)).padStart(2, '0')
   const ss = String(intervalSec % 60).padStart(2, '0')
   const intervalLabel = intervalSec >= 60 ? `${hh}m ${ss}s` : `${intervalSec}s`
-
   return { intervalSec, intervalLabel, reqPerDay, reqPerHour, safeRpm, safeRpd }
 }
 
@@ -105,7 +128,6 @@ function _rateCalcUpdate() {
     ? '24h'
     : `${_get('rate-from') || '07:00'}–${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
 
-  // Store primary (Groq) computed values for Apply
   const groqStats = _calcApiStats(API_CAPS.find(c => c.id === 'groq'), activeMinutes)
   container.dataset.intervalSec = groqStats.intervalSec
   container.dataset.safeRpm     = groqStats.safeRpm
@@ -149,7 +171,7 @@ function _rateCalcUpdate() {
 }
 
 async function _rateApply() {
-  const container  = document.getElementById('rate-all-results')
+  const container   = document.getElementById('rate-all-results')
   const intervalSec = parseInt(container?.dataset.intervalSec || '90')
   const safeRpm     = parseInt(container?.dataset.safeRpm     || '25')
   const alwaysOn    = document.getElementById('rate-always-on')?.checked
