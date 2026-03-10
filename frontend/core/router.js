@@ -1,5 +1,11 @@
 // SPA Router — mirrors QuantTERMINAL_OS router.js
-function navigateTo(pageName) {
+function navigateTo(pageName, options) {
+  // Support ticker deep-link: navigateTo('watchlist', { ticker: 'NVDA' })
+  // initWatchlist() reads window._pendingTicker on activation.
+  if (options && options.ticker) {
+    window._pendingTicker = options.ticker
+  }
+
   // Hide all pages
   document.querySelectorAll('.page').forEach(el => {
     el.classList.remove('active')

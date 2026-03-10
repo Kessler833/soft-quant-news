@@ -26,6 +26,9 @@ RSS_FEEDS = [
 
 async def _get_gemini_model():
     import google.generativeai as genai
+    key = config.get('gemini_key', '')
+    if key:
+        genai.configure(api_key=key)  # configure at call-time, not import-time
     try:
         return genai.GenerativeModel('gemini-2.0-flash')
     except Exception:
@@ -68,18 +71,19 @@ Return ONLY valid JSON array. No markdown. No explanation."""
         for attempt, delay in enumerate(backoff + [None]):
             try:
                 model = await _get_gemini_model()
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()  # fix: get_running_loop not get_event_loop
                 response = await loop.run_in_executor(
                     None,
                     lambda: model.generate_content(prompt)
                 )
+                if not response.text:
+                    return []
                 text = response.text.strip()
-                # Strip possible markdown code fences
                 if text.startswith('```'):
                     text = text.split('```')[1]
                     if text.startswith('json'):
                         text = text[4:]
-                return json.loads(text)
+                return json.loads(text.strip())
             except Exception as e:
                 err_name = type(e).__name__
                 if 'ResourceExhausted' in err_name or '429' in str(e):
@@ -198,7 +202,8 @@ async def _fetch_benzinga(key: str) -> list:
                 f'https://api.benzinga.com/api/v2/news?token={key}&pageSize=50&displayOutput=full'
             )
             r.raise_for_status()
-            items = r.json() if isinstance(r.json(), list) else r.json().get('result', [])
+            raw = r.json()
+            items = raw if isinstance(raw, list) else raw.get('result', [])
             return [
                 _normalize(i.get('title', ''), 'Benzinga', i.get('url', ''),
                            i.get('created', ''))
@@ -212,7 +217,7 @@ async def _fetch_benzinga(key: str) -> list:
 async def _fetch_rss(url: str) -> list:
     try:
         import feedparser
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()  # fix: get_running_loop
         feed = await loop.run_in_executor(None, feedparser.parse, url)
         results = []
         for entry in feed.entries:
@@ -233,9 +238,13 @@ async def _fetch_rss(url: str) -> list:
         return []
 
 
+async def _empty_list() -> list:
+    """Async no-op placeholder — replaces deprecated asyncio.coroutine pattern."""
+    return []
+
+
 async def ingest_all_sources() -> None:
     finnhub_key   = config.get('finnhub_key', '')
-    alpaca_key    = config.get('alpaca_key', '')
     marketaux_tok = config.get('marketaux_token', '')
     newsapi_key   = config.get('newsapi_key', '')
     benzinga_key  = config.get('benzinga_key', '')
@@ -246,8 +255,9 @@ async def ingest_all_sources() -> None:
 
     watchlist_tickers = db.get_watchlist()
 
+    # Fix: use _empty_list() coroutine instead of deprecated asyncio.coroutine()
     tasks = [
-        _fetch_finnhub_general(finnhub_key) if finnhub_key else asyncio.coroutine(lambda: [])()
+        _fetch_finnhub_general(finnhub_key) if finnhub_key else _empty_list()
     ]
     for t in watchlist_tickers:
         if finnhub_key:
@@ -268,7 +278,6 @@ async def ingest_all_sources() -> None:
         if isinstance(r, list):
             all_articles.extend(r)
 
-    # Deduplicate by id against what we already have
     existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
     new_articles = [a for a in all_articles if a['id'] not in existing_ids]
 
@@ -278,7 +287,6 @@ async def ingest_all_sources() -> None:
 
     logger.info(f'[feed] Processing {len(new_articles)} new articles through Gemini...')
 
-    # Batch into groups of 15
     batch_size = 15
     batches = [new_articles[i:i+batch_size] for i in range(0, len(new_articles), batch_size)]
 
@@ -302,10 +310,9 @@ async def ingest_all_sources() -> None:
                 from backend.api import websocket as ws_module
                 await ws_module.broadcast(article)
 
-            # Schedule drift tracking for HIGH articles
             if article.get('relevance') == 'HIGH':
                 tickers = json.loads(article.get('tickers', '[]'))
-                for ticker in tickers[:3]:  # limit drift tracking
+                for ticker in tickers[:3]:
                     _schedule_drift(article['id'], ticker)
 
 
@@ -313,7 +320,6 @@ def _schedule_drift(article_id: str, ticker: str) -> None:
     """Schedule price drift checks at +5m, +15m, +30m via APScheduler."""
     try:
         from backend.main import scheduler
-        from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
         for minutes in [5, 15, 30]:
             run_at = now + timedelta(minutes=minutes)
@@ -331,34 +337,13 @@ def _schedule_drift(article_id: str, ticker: str) -> None:
 
 
 async def _track_drift(article_id: str, ticker: str, minutes: int) -> None:
-    """Store price at given minutes offset after article publication."""
+    """Store price at given minutes offset. Uses db.save_drift() — no direct lock access."""
     try:
         from backend.api.prices import get_quote_price
         price = await get_quote_price(ticker)
         if price is None:
             return
-        with db._lock:
-            conn = db.get_conn()
-            cur = conn.cursor()
-            col = f'price_{minutes}min'
-            # Upsert row
-            cur.execute(
-                'SELECT id FROM drift_tracking WHERE article_id=? AND ticker=?',
-                (article_id, ticker)
-            )
-            row = cur.fetchone()
-            if row:
-                cur.execute(f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?',
-                            (price, article_id, ticker))
-            else:
-                cur.execute(
-                    'INSERT INTO drift_tracking (article_id, ticker, tracked_at) VALUES (?,?,?)',
-                    (article_id, ticker, datetime.now(timezone.utc).isoformat())
-                )
-                cur.execute(f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?',
-                            (price, article_id, ticker))
-            conn.commit()
-            conn.close()
+        db.save_drift(article_id, ticker, minutes, price)
     except Exception as e:
         logger.warning(f'[feed] Drift track error ({ticker} +{minutes}m): {e}')
 

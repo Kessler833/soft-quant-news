@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -17,6 +16,9 @@ _gemini_sem = asyncio.Semaphore(5)
 
 async def _get_gemini_model():
     import google.generativeai as genai
+    key = config.get('gemini_key', '')
+    if key:
+        genai.configure(api_key=key)  # fix: configure at call-time
     try:
         return genai.GenerativeModel('gemini-2.0-flash')
     except Exception:
@@ -33,11 +35,13 @@ async def _gemini_call(prompt_text: str) -> str:
         for attempt, delay in enumerate(backoff + [None]):
             try:
                 model = await _get_gemini_model()
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()  # fix: get_running_loop
                 response = await loop.run_in_executor(
                     None,
                     lambda: model.generate_content(prompt_text)
                 )
+                if not response.text:
+                    raise ValueError('Empty Gemini response')
                 return response.text
             except Exception as e:
                 err_name = type(e).__name__
@@ -63,7 +67,6 @@ async def generate_premarket_brief() -> None:
     high_med  = [a for a in articles if a.get('relevance') in ('HIGH', 'MEDIUM')]
     headlines = '\n'.join(f"- {a['title']}" for a in high_med[:60])
 
-    # Pull today’s calendar events
     from backend.api.calendar import get_events
     events_raw = await get_events()
     events_str = '\n'.join(
@@ -96,7 +99,7 @@ Today's events:
             text = text.split('```')[1]
             if text.startswith('json'):
                 text = text[4:]
-        parsed = json.loads(text)
+        parsed = json.loads(text.strip())
         db.set_ai_cache('premarket_brief', json.dumps(parsed))
         logger.info('[ai] Pre-market brief generated.')
     except Exception as e:
@@ -119,7 +122,6 @@ async def get_premarket_brief():
             return json.loads(raw)
         except Exception:
             pass
-    # Not cached yet — generate on demand and wait
     await generate_premarket_brief()
     raw = db.get_ai_cache('premarket_brief')
     if raw:
@@ -206,7 +208,7 @@ If no headlines found, base on general market knowledge."""
             text = text.split('```')[1]
             if text.startswith('json'):
                 text = text[4:]
-        return json.loads(text)
+        return json.loads(text.strip())
     except json.JSONDecodeError:
         return {
             'ticker': ticker, 'bull_case': [], 'bear_case': [],

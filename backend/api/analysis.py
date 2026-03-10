@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 
 import httpx
 from fastapi import APIRouter
@@ -47,10 +46,9 @@ def _score_article(article: dict) -> float:
 @router.get('/sentiment')
 async def get_sentiment():
     now = datetime.now(timezone.utc)
-    cutoff_2h  = (now - timedelta(hours=2)).isoformat()
     cutoff_30m = (now - timedelta(minutes=30)).isoformat()
 
-    all_articles  = db.get_articles_since(hours=2)
+    all_articles = db.get_articles_since(hours=2)
     last_30m = [a for a in all_articles if a.get('published_at', '') >= cutoff_30m]
 
     def _overall(arts: list) -> float:
@@ -60,16 +58,19 @@ async def get_sentiment():
         count = len(arts)
         return max(-100.0, min(100.0, (total / count) * 50))
 
-    overall_now    = _overall(all_articles)
-    overall_30m    = _overall(last_30m)
-    velocity       = round(overall_now - overall_30m, 2)
+    overall_now = _overall(all_articles)
+    overall_30m = _overall(last_30m)
+    velocity    = round(overall_now - overall_30m, 2)
 
-    # Per-ticker scoring against watchlist
     watchlist = db.get_watchlist()
     per_ticker = {}
     for ticker in watchlist:
-        ticker_arts = [a for a in all_articles
-                       if ticker in json.loads(a.get('tickers', '[]'))]
+        tickers_field = a.get('tickers', [])
+        ticker_arts = [
+            a for a in all_articles
+            if ticker in (tickers_field if isinstance(tickers_field, list) else json.loads(tickers_field or '[]'))
+            for tickers_field in [a.get('tickers', [])]
+        ]
         per_ticker[ticker] = round(_overall(ticker_arts), 2)
 
     return {
@@ -87,10 +88,14 @@ async def get_heatmap():
     sector_counts: dict = {}
 
     for article in articles:
-        try:
-            tickers = json.loads(article.get('tickers', '[]'))
-        except Exception:
-            tickers = []
+        tickers_field = article.get('tickers', [])
+        if isinstance(tickers_field, list):
+            tickers = tickers_field
+        else:
+            try:
+                tickers = json.loads(tickers_field or '[]')
+            except Exception:
+                tickers = []
         score = _score_article(article)
         for ticker in tickers:
             sector = TICKER_SECTOR.get(ticker)
@@ -129,17 +134,15 @@ async def get_wsb():
 
 
 async def update_wsb_sentiment() -> None:
-    """Fetch WSB Reddit sentiment from nbshare API (no auth). Called by scheduler."""
+    """Fetch WSB Reddit sentiment. Called by scheduler every 15min."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get('https://dashboard.nbshare.io/api/v1/apps/reddit')
             r.raise_for_status()
             data = r.json()
-            # Normalise: expect list of {ticker, mentions, sentiment} or similar
             if isinstance(data, list):
                 top20 = data[:20]
             elif isinstance(data, dict):
-                # Try common keys
                 top20 = (
                     data.get('data', data.get('tickers', data.get('results', [])))[:20]
                 )
@@ -162,6 +165,8 @@ async def generate_macro_narrative() -> None:
         return
 
     import google.generativeai as genai
+    genai.configure(api_key=gemini_key)  # fix: configure at call-time
+
     articles = db.get_latest_articles(limit=50, relevance_filter=None)
     high_med = [a for a in articles if a.get('relevance') in ('HIGH', 'MEDIUM')]
     headlines = '\n'.join(f"- {a['title']}" for a in high_med[:50])
@@ -176,8 +181,11 @@ Headlines:
 
     try:
         model = genai.GenerativeModel('gemini-2.0-flash')
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()  # fix: get_running_loop
         response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
+        if not response.text:
+            logger.warning('[analysis] Gemini returned empty narrative.')
+            return
         text = response.text.strip()
         lines = [l.strip() for l in text.split('\n') if l.strip()]
         regime_line = lines[-1] if lines else 'CHOPPY'

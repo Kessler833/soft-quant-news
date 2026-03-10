@@ -1,7 +1,7 @@
 import sqlite3
 import threading
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 DB_PATH = 'data/news.db'
 _lock = threading.Lock()
@@ -103,6 +103,60 @@ def save_article(article: dict) -> None:
         conn.close()
 
 
+def save_drift(article_id: str, ticker: str, minutes: int, price: float) -> None:
+    """Upsert a price drift measurement. Called by feed._track_drift.
+    Uses internal lock — callers must NOT hold _lock themselves."""
+    col_map = {5: 'price_5min', 15: 'price_15min', 30: 'price_30min'}
+    col = col_map.get(minutes)
+    if col is None:
+        return
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id FROM drift_tracking WHERE article_id=? AND ticker=?',
+            (article_id, ticker)
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?',
+                (price, article_id, ticker)
+            )
+        else:
+            cur.execute(
+                'INSERT INTO drift_tracking (article_id, ticker, tracked_at) VALUES (?,?,?)',
+                (article_id, ticker, datetime.now(timezone.utc).isoformat())
+            )
+            cur.execute(
+                f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?',
+                (price, article_id, ticker)
+            )
+        conn.commit()
+        conn.close()
+
+
+def _row_to_article(row, columns) -> dict:
+    """Convert a DB row to an article dict, always parsing tickers to a list."""
+    d = dict(zip(columns, row))
+    tickers_raw = d.get('tickers', '[]')
+    if isinstance(tickers_raw, list):
+        d['tickers'] = tickers_raw
+    else:
+        try:
+            d['tickers'] = json.loads(tickers_raw or '[]')
+        except Exception:
+            d['tickers'] = []
+    return d
+
+
+ARTICLE_COLUMNS = [
+    'id', 'title', 'summary', 'source', 'url', 'tickers',
+    'sentiment', 'relevance', 'impact_score', 'catalyst_type',
+    'published_at', 'processed_at'
+]
+
+
 def get_latest_articles(
     limit: int = 50,
     relevance_filter: str = None,
@@ -137,14 +191,10 @@ def get_latest_articles(
     cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
-    columns = ['id', 'title', 'summary', 'source', 'url', 'tickers',
-               'sentiment', 'relevance', 'impact_score', 'catalyst_type',
-               'published_at', 'processed_at']
-    return [dict(zip(columns, row)) for row in rows]
+    return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
 
 
 def get_articles_since(hours: int = 4) -> list:
-    from datetime import timedelta
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     conn = get_conn()
     cur = conn.cursor()
@@ -154,10 +204,7 @@ def get_articles_since(hours: int = 4) -> list:
     )
     rows = cur.fetchall()
     conn.close()
-    columns = ['id', 'title', 'summary', 'source', 'url', 'tickers',
-               'sentiment', 'relevance', 'impact_score', 'catalyst_type',
-               'published_at', 'processed_at']
-    return [dict(zip(columns, row)) for row in rows]
+    return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
 
 
 def get_articles_for_ticker(ticker: str) -> list:
@@ -169,10 +216,7 @@ def get_articles_for_ticker(ticker: str) -> list:
     )
     rows = cur.fetchall()
     conn.close()
-    columns = ['id', 'title', 'summary', 'source', 'url', 'tickers',
-               'sentiment', 'relevance', 'impact_score', 'catalyst_type',
-               'published_at', 'processed_at']
-    return [dict(zip(columns, row)) for row in rows]
+    return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
 
 
 def get_ai_cache(key: str):

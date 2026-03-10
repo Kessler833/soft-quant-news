@@ -107,6 +107,80 @@ body {
   flex-direction: column;
 }
 
+/* ── Split.js container rules ─────────────────────────────────────────────
+   Split.js needs parent containers to be display:flex with height:100%.
+   Without these rules, panels collapse to 0px.
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* Horizontal split wrapper — direct child of .page.active */
+.split-wrap {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+/* Each panel inside a split */
+.split-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+/* Scrollable panel body */
+.split-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  min-height: 0;
+}
+
+/* Right-side stacked sub-panels (calendar, home, ai) */
+.split-right {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+.split-right__top {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+  border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.split-right__bottom {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+
+/* Plotly chart containers — must have explicit height or charts render at 0px */
+.chart-container {
+  width: 100%;
+  height: 280px;
+  min-height: 280px;
+}
+
+.chart-container--tall {
+  height: 380px;
+  min-height: 380px;
+}
+
+/* ── Coming Soon ────────────────────────────────────────────────────────── */
 .coming-soon {
   display: flex;
   align-items: center;
