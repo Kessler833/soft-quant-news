@@ -19,12 +19,6 @@ _groq_sem = asyncio.Semaphore(1)
 _status_queues: list = []
 _raw_queues: list = []
 
-RSS_FEEDS = [
-    'https://rss.forexlive.com',
-    'https://feeds.reuters.com/reuters/businessNews',
-    'https://feeds.content.dowjones.io/public/rss/mw_realtimeheadline',
-]
-
 # ── Base hardcoded keywords (fallback) ───────────────────────────────────────
 
 _BASE_HIGH = [
@@ -121,10 +115,6 @@ def rule_score(article: dict) -> dict:
 # ── Keyword refresh ───────────────────────────────────────────────────────
 
 async def refresh_keywords(force: bool = False) -> None:
-    """Generate fresh AI keywords.
-    force=True  → always run immediately (startup with no cache, manual button).
-    force=False → skip if cache is less than 6 hours old (scheduler tick).
-    """
     groq_key = config.get('groq_key', '')
     if not groq_key:
         logger.warning('[feed] No Groq key — skipping keyword refresh.')
@@ -137,7 +127,7 @@ async def refresh_keywords(force: bool = False) -> None:
                 age = (datetime.now(timezone.utc) - datetime.fromisoformat(
                     kw['generated_at'].replace('Z', '+00:00'))).total_seconds()
                 if age < 21600:
-                    logger.info(f'[feed] Keywords fresh ({int(age/3600)}h old), skipping refresh.')
+                    logger.info(f'[feed] Keywords fresh ({int(age/3600)}h old), skipping.')
                     return
             except Exception:
                 pass
@@ -146,7 +136,7 @@ async def refresh_keywords(force: bool = False) -> None:
     _emit_status('ai: Generating market-aware filter keywords...')
 
     prompt = """You are a financial news filter for a US equity day trader.
-Based on CURRENT macro market conditions (consider Fed policy stance, active earnings season, geopolitical tensions, sector rotations happening right now), generate keyword lists for filtering financial news headlines.
+Based on CURRENT macro market conditions, generate keyword lists for filtering financial news headlines.
 Return ONLY this JSON, no markdown:
 {
   "high": ["keyword1","keyword2",...],
@@ -156,8 +146,7 @@ Return ONLY this JSON, no markdown:
 }
 HIGH = 25-30 keywords/phrases that indicate genuinely market-moving events for US equities right now.
 MEDIUM = 25-30 keywords for relevant but non-urgent news.
-LOW = 15-20 keywords for marginally relevant news worth tracking.
-Be specific to current market themes, not just generic finance words."""
+LOW = 15-20 keywords for marginally relevant news worth tracking."""
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -183,7 +172,7 @@ Be specific to current market themes, not just generic finance words."""
                 parsed.get('low', []),
                 parsed.get('context_note', ''),
             )
-            _cached_kw['_loaded_at'] = None  # bust in-memory cache
+            _cached_kw['_loaded_at'] = None
             _emit_status('done: Filter keywords updated — AI context applied')
             logger.info('[feed] Keywords refreshed from Groq.')
     except Exception as e:
@@ -241,11 +230,6 @@ For EACH headline return a JSON array. Each element:
 - "catalyst_type": "Earnings"|"Fed"|"Macro"|"Analyst"|"M&A"|"Regulatory"|"Geopolitical"|"Other"
 - "summary": one trader-focused sentence (empty string if IGNORE or LOW)
 
-HIGH = genuinely market-moving for US equities today
-MEDIUM = relevant, worth watching
-LOW = marginally relevant, minor news
-IGNORE = not relevant to US equity markets
-
 Input:
 {headlines_json}
 
@@ -284,7 +268,7 @@ Return ONLY a valid JSON array. No markdown."""
     return []
 
 
-# ── Source fetchers ──────────────────────────────────────────────────────────
+# ── Source fetchers (Finnhub only) ──────────────────────────────────────────────
 
 def _make_id(title):
     return hashlib.sha256(title.lower().strip().encode()).hexdigest()[:24]
@@ -325,91 +309,50 @@ async def _fetch_finnhub_company(key, ticker):
         logger.warning(f'[feed] Finnhub {ticker}: {e}'); return []
 
 
-async def _fetch_marketaux(token):
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f'https://api.marketaux.com/v1/news/all?api_token={token}&language=en&limit=50&filter_entities=true')
-            r.raise_for_status()
-            return [_normalize(i.get('title',''), 'Marketaux', i.get('url',''), i.get('published_at',''))
-                    for i in r.json().get('data',[]) if i.get('title')]
-    except Exception as e:
-        logger.warning(f'[feed] Marketaux: {e}'); return []
-
-
-async def _fetch_newsapi(key):
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f'https://newsapi.org/v2/top-headlines?category=business&pageSize=50&apiKey={key}')
-            r.raise_for_status()
-            return [_normalize(i.get('title',''), 'NewsAPI', i.get('url',''), i.get('publishedAt',''))
-                    for i in r.json().get('articles',[]) if i.get('title')]
-    except Exception as e:
-        logger.warning(f'[feed] NewsAPI: {e}'); return []
-
-
-async def _fetch_rss(url):
-    try:
-        import feedparser, time
-        loop = asyncio.get_running_loop()
-        feed = await loop.run_in_executor(None, feedparser.parse, url)
-        results = []
-        for entry in feed.entries:
-            title = entry.get('title', '')
-            if not title: continue
-            pub = ''
-            if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                pub = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc).isoformat()
-            results.append(_normalize(title, f'RSS:{url.split("/")[2]}', entry.get('link',''), pub))
-        return results
-    except Exception as e:
-        logger.warning(f'[feed] RSS {url}: {e}'); return []
-
-
 async def _empty_list(): return []
 
 
 # ── Main ingest ──────────────────────────────────────────────────────────────
 
 async def ingest_all_sources() -> None:
-    finnhub_key   = config.get('finnhub_key', '')
-    marketaux_tok = config.get('marketaux_token', '')
-    newsapi_key   = config.get('newsapi_key', '')
-    groq_key      = config.get('groq_key', '')
+    finnhub_key = config.get('finnhub_key', '')
+    groq_key    = config.get('groq_key', '')
 
-    _emit_status('fetching: Collecting articles from all sources...')
+    if not finnhub_key:
+        _emit_status('idle: No Finnhub key — skipping ingest')
+        return
+
+    _emit_status('fetching: Collecting articles from Finnhub...')
 
     watchlist_tickers = db.get_watchlist()
-    tasks = [_fetch_finnhub_general(finnhub_key) if finnhub_key else _empty_list()]
+    tasks = [_fetch_finnhub_general(finnhub_key)]
     for t in watchlist_tickers:
-        if finnhub_key:
-            tasks.append(_fetch_finnhub_company(finnhub_key, t))
-    if marketaux_tok: tasks.append(_fetch_marketaux(marketaux_tok))
-    if newsapi_key:   tasks.append(_fetch_newsapi(newsapi_key))
-    for rss_url in RSS_FEEDS:
-        tasks.append(_fetch_rss(rss_url))
+        tasks.append(_fetch_finnhub_company(finnhub_key, t))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
+
     existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
     new_articles = [a for a in all_articles if a['id'] not in existing_ids]
+
+    # Always stream ALL fetched articles to the raw panel (not just new ones)
+    # so the raw panel is populated even when everything is already in DB
+    for article in all_articles:
+        _emit_raw(article)
 
     if not new_articles:
         _emit_status('idle: Feed up to date — no new articles')
         return
 
-    _emit_status(f'scoring: Rule-scoring {len(new_articles)} articles...')
+    _emit_status(f'scoring: Rule-scoring {len(new_articles)} new articles...')
     for article in new_articles:
         article.update(rule_score(article))
 
-    # Broadcast raw (pre-Groq) to Raw News panel immediately
-    for article in new_articles:
-        _emit_raw(article)
-
     if groq_key:
-        to_enrich = [a for a in new_articles if a['relevance'] not in ('IGNORE',)]
+        to_enrich = [a for a in new_articles if a['relevance'] != 'IGNORE']
         if to_enrich:
             batch = to_enrich[:15]
-            _emit_status(f'ai: Groq enriching {len(batch)}/{len(to_enrich)} articles...')
+            _emit_status(f'ai: Groq enriching {len(batch)} articles...')
             groq_results = await groq_filter_batch(batch)
             groq_map = {g['id']: g for g in groq_results if isinstance(g, dict)}
             enriched = 0
@@ -424,8 +367,6 @@ async def ingest_all_sources() -> None:
                     article['summary']       = g.get('summary', '')
                     enriched += 1
             _emit_status(f'ai: Enriched {enriched}/{len(batch)} articles')
-    else:
-        _emit_status('scoring: Rule-based only (no Groq key)')
 
     saved = 0
     for article in new_articles:
@@ -511,7 +452,6 @@ async def keyword_status():
 
 @router.post('/refresh-keywords')
 async def trigger_refresh_keywords():
-    # Always force-run immediately, don't respect the 6h cache
     asyncio.create_task(refresh_keywords(force=True))
     return {'status': 'generating'}
 
