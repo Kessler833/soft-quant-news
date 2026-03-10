@@ -30,15 +30,15 @@
         <input id="key-groq" class="synchro-input" type="password" placeholder="gsk_..."/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Finnhub Key</label>
+        <label class="synchro-label">Finnhub Key <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 60 req/min)</span></label>
         <input id="key-finnhub" class="synchro-input" type="password" placeholder=""/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">NewsAPI Key</label>
+        <label class="synchro-label">NewsAPI Key <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 100 req/day)</span></label>
         <input id="key-newsapi" class="synchro-input" type="password" placeholder=""/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Marketaux Token</label>
+        <label class="synchro-label">Marketaux Token <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 100 req/day)</span></label>
         <input id="key-marketaux" class="synchro-input" type="password" placeholder=""/>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px;">
@@ -48,40 +48,31 @@
       <div id="synchro-save-msg" style="margin-top:8px;"></div>
     </div>
 
-    <!-- Groq Rate Limit Planner -->
+    <!-- Rate Limit Planner -->
     <div style="margin-bottom:24px;">
-      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Groq Rate Limit Planner</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;"
-           id="groq-cap-info">Groq free tier: <strong style="color:var(--text-primary);">1,000 req/day &middot; 30 RPM</strong></div>
-
-      <div class="synchro-field-group">
-        <label class="synchro-label">Daily ingest window &mdash; From</label>
-        <input id="rate-from" class="synchro-input" type="time" value="07:00" style="max-width:140px;"/>
-      </div>
-      <div class="synchro-field-group">
-        <label class="synchro-label">Daily ingest window &mdash; Until</label>
-        <input id="rate-until" class="synchro-input" type="time" value="22:00" style="max-width:140px;"/>
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Rate Limit Planner</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
+        Calculates the optimal ingest interval for each API so your daily quota lasts the full active window &mdash; with a <strong style="color:var(--text-primary);">15% buffer</strong>.
       </div>
 
-      <div style="margin:10px 0;display:flex;align-items:center;gap:8px;">
-        <input type="checkbox" id="rate-always-on" style="width:15px;height:15px;cursor:pointer;"/>
-        <label for="rate-always-on" style="font-size:12px;color:var(--text-primary);cursor:pointer;">
-          Always available &mdash; distribute requests evenly across the full 24 hours
-        </label>
+      <!-- Window controls -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+        <div class="synchro-field-group" style="margin-bottom:0;">
+          <label class="synchro-label">Window &mdash; From</label>
+          <input id="rate-from" class="synchro-input" type="time" value="07:00" style="max-width:130px;"/>
+        </div>
+        <div class="synchro-field-group" style="margin-bottom:0;">
+          <label class="synchro-label">Window &mdash; Until</label>
+          <input id="rate-until" class="synchro-input" type="time" value="22:00" style="max-width:130px;"/>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding-bottom:2px;">
+          <input type="checkbox" id="rate-always-on" style="width:15px;height:15px;cursor:pointer;"/>
+          <label for="rate-always-on" style="font-size:12px;color:var(--text-primary);cursor:pointer;">Always on (24h)</label>
+        </div>
       </div>
 
-      <div id="rate-result" style="
-        margin-top:12px;padding:12px 14px;
-        background:var(--bg-panel);border:1px solid var(--border);
-        border-radius:6px;font-size:12px;line-height:1.8;
-      "></div>
-
-      <div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.6;">
-        The planner calculates the optimal ingest interval so your daily Groq quota lasts
-        exactly the full active window &mdash; with a <strong>15% buffer</strong> to absorb
-        bursts. Rule-based filtering always runs instantly regardless of Groq availability.
-        If Groq is rate-limited mid-cycle it falls back to rule-based automatically.
-      </div>
+      <!-- Per-API stat cards -->
+      <div id="rate-all-results" style="display:flex;flex-direction:column;gap:10px;"></div>
 
       <button id="rate-apply-btn" class="synchro-btn synchro-btn--primary" style="margin-top:12px;">&#10003; Apply Schedule</button>
     </div>

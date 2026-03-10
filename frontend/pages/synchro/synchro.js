@@ -1,6 +1,11 @@
-// Groq free tier caps
-const GROQ_RPM_CAP = 30
-const GROQ_RPD_CAP = 1000
+// ── API rate caps (free tier) ─────────────────────────────────────────────────
+const API_CAPS = [
+  { id: 'groq',      name: 'Groq AI',   rpm: 30,   rpd: 1000, color: 'var(--accent-blue)',   note: 'console.groq.com' },
+  { id: 'finnhub',   name: 'Finnhub',   rpm: 60,   rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
+  { id: 'newsapi',   name: 'NewsAPI',   rpm: null,  rpd: 100,  color: 'var(--accent-purple)', note: 'newsapi.org' },
+  { id: 'marketaux', name: 'Marketaux', rpm: null,  rpd: 100,  color: 'var(--accent-green)',  note: 'marketaux.com' },
+  { id: 'alpaca',    name: 'Alpaca',    rpm: 200,  rpd: null, color: 'var(--text-primary)',   note: 'Data stream (unlimited news)' },
+]
 
 let _synchroInitDone = false
 
@@ -42,14 +47,46 @@ function _synchroLoadFields() {
   }
 }
 
-// ── Rate Limit Calculator ─────────────────────────────────────────────────────
+// ── Rate Limit Calculator (all APIs) ──────────────────────────────────────────
+
+function _calcApiStats(cap, activeMinutes) {
+  const BUFFER = 0.85
+
+  // Effective RPM limit
+  const safeRpm = cap.rpm ? Math.floor(cap.rpm * BUFFER) : null
+  // Effective RPD limit
+  const safeRpd = cap.rpd ? Math.floor(cap.rpd * BUFFER) : null
+
+  let intervalSec
+  if (safeRpd) {
+    // space requests evenly over active window to hit budget
+    intervalSec = Math.ceil((activeMinutes * 60) / safeRpd)
+  } else {
+    // no daily cap — use RPM alone
+    intervalSec = Math.ceil(60 / safeRpm)
+  }
+
+  // Never faster than RPM allows
+  if (safeRpm) {
+    intervalSec = Math.max(intervalSec, Math.ceil(60 / safeRpm))
+  }
+
+  const reqPerDay  = Math.floor((activeMinutes * 60) / intervalSec)
+  const reqPerHour = Math.floor(3600 / intervalSec)
+
+  const hh = String(Math.floor(intervalSec / 60)).padStart(2, '0')
+  const ss = String(intervalSec % 60).padStart(2, '0')
+  const intervalLabel = intervalSec >= 60 ? `${hh}m ${ss}s` : `${intervalSec}s`
+
+  return { intervalSec, intervalLabel, reqPerDay, reqPerHour, safeRpm, safeRpd }
+}
 
 function _rateCalcUpdate() {
   const alwaysOn = document.getElementById('rate-always-on')?.checked
   const fromEl   = document.getElementById('rate-from')
   const untilEl  = document.getElementById('rate-until')
-  const resultEl = document.getElementById('rate-result')
-  if (!resultEl) return
+  const container = document.getElementById('rate-all-results')
+  if (!container) return
 
   let activeMinutes
   if (alwaysOn) {
@@ -64,51 +101,57 @@ function _rateCalcUpdate() {
     activeMinutes = until > from ? until - from : (1440 - from + until)
   }
 
-  // Budget: 85% of daily cap (15% buffer)
-  const budget        = Math.floor(GROQ_RPD_CAP * 0.85)
-  // Interval between ingests in seconds (with 15% safety margin on RPM too)
-  const safeRpm       = Math.floor(GROQ_RPM_CAP * 0.85)  // 25
-  const intervalSec   = Math.ceil((activeMinutes * 60) / budget)
-  // Never faster than what RPM allows
-  const finalInterval = Math.max(intervalSec, Math.ceil(60 / safeRpm))
-  const reqPerDay     = Math.floor((activeMinutes * 60) / finalInterval)
-  const reqPerHour    = Math.floor(3600 / finalInterval)
-
-  const hh = String(Math.floor(finalInterval / 60)).padStart(2, '0')
-  const ss = String(finalInterval % 60).padStart(2, '0')
-  const intervalLabel = finalInterval >= 60 ? `${hh}m ${ss}s` : `${finalInterval}s`
-
   const windowLabel = alwaysOn
-    ? '24 hours (always on)'
-    : `${_get('rate-from') || '07:00'} – ${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
+    ? '24h'
+    : `${_get('rate-from') || '07:00'}–${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
 
-  resultEl.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
-      <div>
-        <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Ingest Every</div>
-        <div style="color:var(--accent-blue);font-size:18px;font-weight:700;">${intervalLabel}</div>
-      </div>
-      <div>
-        <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Hour</div>
-        <div style="color:var(--text-primary);font-size:18px;font-weight:700;">${reqPerHour}</div>
-      </div>
-      <div>
-        <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Day</div>
-        <div style="color:var(--accent-green);font-size:18px;font-weight:700;">${reqPerDay} <span style="font-size:11px;color:var(--text-muted);">/ ${GROQ_RPD_CAP}</span></div>
-      </div>
-    </div>
-    <div style="color:var(--text-muted);font-size:11px;">Window: ${windowLabel} &nbsp;&middot;&nbsp; Buffer: 15% &nbsp;&middot;&nbsp; Recommended interval: <strong style="color:var(--text-primary);">${intervalLabel}</strong></div>
-  `
+  // Store primary (Groq) computed values for Apply
+  const groqStats = _calcApiStats(API_CAPS.find(c => c.id === 'groq'), activeMinutes)
+  container.dataset.intervalSec = groqStats.intervalSec
+  container.dataset.safeRpm     = groqStats.safeRpm
 
-  // Store computed values for Apply
-  resultEl.dataset.intervalSec = finalInterval
-  resultEl.dataset.safeRpm     = safeRpm
+  container.innerHTML = API_CAPS.map(cap => {
+    const s = _calcApiStats(cap, activeMinutes)
+    const rpdLabel  = cap.rpd  ? `${cap.rpd} req/day`  : '&infin;'
+    const rpmLabel  = cap.rpm  ? `${cap.rpm} RPM`       : '&infin;'
+    const usedLabel = cap.rpd  ? `${s.reqPerDay} <span style="font-size:10px;color:var(--text-muted);">/ ${cap.rpd}</span>` : `${s.reqPerDay}`
+    return `
+      <div style="
+        padding:12px 14px;
+        background:var(--bg-panel);border:1px solid var(--border);
+        border-left:3px solid ${cap.color};
+        border-radius:6px;font-size:12px;line-height:1.8;
+      ">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-size:13px;font-weight:700;color:${cap.color};">${cap.name}</span>
+          <span style="font-size:10px;color:var(--text-muted);">${rpmLabel} &nbsp;&middot;&nbsp; ${rpdLabel} &nbsp;&middot;&nbsp; ${cap.note}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
+          <div>
+            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Ingest Every</div>
+            <div style="color:${cap.color};font-size:17px;font-weight:700;">${s.intervalLabel}</div>
+          </div>
+          <div>
+            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Hour</div>
+            <div style="color:var(--text-primary);font-size:17px;font-weight:700;">${s.reqPerHour}</div>
+          </div>
+          <div>
+            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Day</div>
+            <div style="font-size:17px;font-weight:700;color:var(--accent-green);">${usedLabel}</div>
+          </div>
+          <div>
+            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Window</div>
+            <div style="color:var(--text-muted);font-size:12px;font-weight:600;">${windowLabel}</div>
+          </div>
+        </div>
+      </div>`
+  }).join('')
 }
 
 async function _rateApply() {
-  const resultEl = document.getElementById('rate-result')
-  const intervalSec = parseInt(resultEl?.dataset.intervalSec || '90')
-  const safeRpm     = parseInt(resultEl?.dataset.safeRpm     || '25')
+  const container  = document.getElementById('rate-all-results')
+  const intervalSec = parseInt(container?.dataset.intervalSec || '90')
+  const safeRpm     = parseInt(container?.dataset.safeRpm     || '25')
   const alwaysOn    = document.getElementById('rate-always-on')?.checked
 
   QuantCache.saveRateSettings({
@@ -119,11 +162,10 @@ async function _rateApply() {
     groqRpm:     safeRpm,
   })
 
-  // Push to backend to reschedule
   const keys = QuantCache.loadApiKeys()
   try {
     await apiHealth({ ...keys, ingest_interval_sec: intervalSec, groq_rpm: safeRpm })
-    _synchroShowSaveMsg(`Schedule applied — ingest every ${intervalSec}s.`, 'success')
+    _synchroShowSaveMsg(`Schedule applied — Groq ingest every ${intervalSec}s.`, 'success')
   } catch (e) {
     _synchroShowSaveMsg(`Saved locally. Backend: ${e.message}`, 'warning')
   }
