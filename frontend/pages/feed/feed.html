@@ -1,69 +1,72 @@
-<div id="feed-main" style="display:flex;flex-direction:column;overflow:hidden;">
-
-  <div id="feed-toolbar" style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--bg-tertiary);flex-shrink:0;flex-wrap:wrap;">
-    <select id="filter-relevance" class="feed-select">
-      <option value="">All Relevance</option>
-      <option value="HIGH">HIGH</option>
-      <option value="MEDIUM">MEDIUM</option>
-      <option value="LOW">LOW</option>
-      <option value="IGNORE">IGNORE</option>
-    </select>
-    <select id="filter-sentiment" class="feed-select">
-      <option value="">All Sentiment</option>
-      <option value="Bullish">Bullish</option>
-      <option value="Bearish">Bearish</option>
-      <option value="Neutral">Neutral</option>
-    </select>
-    <select id="filter-catalyst" class="feed-select">
-      <option value="">All Catalysts</option>
-      <option value="Earnings">Earnings</option>
-      <option value="Fed">Fed</option>
-      <option value="Macro">Macro</option>
-      <option value="Analyst">Analyst</option>
-      <option value="M&amp;A">M&amp;A</option>
-      <option value="Regulatory">Regulatory</option>
-      <option value="Geopolitical">Geopolitical</option>
-      <option value="Other">Other</option>
-    </select>
-    <input id="filter-ticker" class="feed-input" type="text" placeholder="Ticker filter..." maxlength="6" style="width:100px;" />
-    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-      <div id="feed-ws-banner" style="display:none;"></div>
-      <button id="sound-toggle" class="feed-btn" title="Toggle sound alerts">&#9834; Sound ON</button>
-    </div>
-  </div>
-
-  <div id="feed-status-bar" style="display:none;align-items:center;gap:8px;padding:5px 14px;background:var(--bg-tertiary);border-bottom:1px solid var(--border);font-size:11px;font-family:'JetBrains Mono',monospace;flex-shrink:0;">
-    <div id="feed-status-spinner" class="spinner" style="flex-shrink:0;"></div>
-    <span id="feed-status-text" style="color:var(--text-muted);">Initialising...</span>
-    <span id="feed-status-badge" style="margin-left:auto;font-size:10px;padding:2px 6px;border-radius:3px;background:var(--bg-panel);color:var(--text-muted);border:1px solid var(--border);">INGEST</span>
-  </div>
-
-  <div id="feed-list" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>
-
-  <div id="feed-chart-modal" class="modal">
-    <div class="modal-content modal-content--wide">
-      <div class="modal-header">
-        <h3 id="feed-chart-title">Price Chart</h3>
-        <button class="modal-close" id="feed-chart-close">&#x2715;</button>
-      </div>
-      <div class="modal-body" style="padding:0;height:440px;">
-        <div id="feed-chart-container" style="width:100%;height:100%;"></div>
-      </div>
-    </div>
-  </div>
-
+<div id="feed-status-bar">
+  <div id="feed-status-spinner" class="spinner" style="flex-shrink:0;width:12px;height:12px;border-width:2px;"></div>
+  <span id="feed-status-text" style="color:var(--text-muted);">Waiting for ingest...</span>
+  <span id="feed-status-badge" style="margin-left:auto;font-size:10px;padding:2px 6px;border-radius:3px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--bg-tertiary);">IDLE</span>
+  <div id="feed-ws-banner" style="display:none;"></div>
 </div>
 
-<div id="feed-raw" style="display:flex;flex-direction:column;overflow:hidden;">
-  <div class="panel-header">&#11041; Raw News</div>
+<div id="feed-split-wrap">
 
-  <div id="feed-filter-info">
-    <div id="filter-last-update">Last update: --</div>
-    <div id="filter-next-update">Next: --</div>
-    <div id="filter-kw-counts"></div>
-    <div id="filter-context"></div>
-    <button class="filter-update-btn" id="filter-update-btn">&#8635; Update Filter Now</button>
+  <div id="feed-main">
+    <div id="feed-toolbar" style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--bg-tertiary);flex-shrink:0;flex-wrap:wrap;">
+      <select id="filter-relevance" class="feed-select">
+        <option value="">All Relevance</option>
+        <option value="HIGH">HIGH</option>
+        <option value="MEDIUM">MEDIUM</option>
+        <option value="LOW">LOW</option>
+        <option value="IGNORE">IGNORE</option>
+      </select>
+      <select id="filter-sentiment" class="feed-select">
+        <option value="">All Sentiment</option>
+        <option value="Bullish">Bullish</option>
+        <option value="Bearish">Bearish</option>
+        <option value="Neutral">Neutral</option>
+      </select>
+      <select id="filter-catalyst" class="feed-select">
+        <option value="">All Catalysts</option>
+        <option value="Earnings">Earnings</option>
+        <option value="Fed">Fed</option>
+        <option value="Macro">Macro</option>
+        <option value="Analyst">Analyst</option>
+        <option value="M&amp;A">M&amp;A</option>
+        <option value="Regulatory">Regulatory</option>
+        <option value="Geopolitical">Geopolitical</option>
+        <option value="Other">Other</option>
+      </select>
+      <input id="filter-ticker" class="feed-input" type="text" placeholder="Ticker filter..." maxlength="6" style="width:100px;" />
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+        <button id="sound-toggle" class="feed-btn" title="Toggle sound alerts">&#9834; Sound ON</button>
+      </div>
+    </div>
+
+    <div id="feed-list" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>
+
+    <div id="feed-chart-modal" class="modal">
+      <div class="modal-content modal-content--wide">
+        <div class="modal-header">
+          <h3 id="feed-chart-title">Price Chart</h3>
+          <button class="modal-close" id="feed-chart-close">&#x2715;</button>
+        </div>
+        <div class="modal-body" style="padding:0;height:440px;">
+          <div id="feed-chart-container" style="width:100%;height:100%;"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div id="raw-list" style="flex:1;overflow-y:auto;"></div>
+  <div id="feed-raw">
+    <div class="panel-header">&#11041; Raw News</div>
+
+    <div id="feed-filter-info">
+      <div id="filter-loading"><div class="spinner"></div> Generating filter...</div>
+      <div id="filter-last-update">Last update: --</div>
+      <div id="filter-next-update">Next: --</div>
+      <div id="filter-kw-counts"></div>
+      <div id="filter-context"></div>
+      <button class="filter-update-btn" id="filter-update-btn">&#8635; Update Filter Now</button>
+    </div>
+
+    <div id="raw-list" style="flex:1;overflow-y:auto;"></div>
+  </div>
+
 </div>
