@@ -1,8 +1,9 @@
+import asyncio
 import logging
 import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
-from data import config
+from data import config, db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -17,7 +18,6 @@ class KeysPayload(BaseModel):
     benzinga_key: str = ''
     newsapi_key: str = ''
     stockgeist_token: str = ''
-    # Rate limit settings
     groq_rpm: int = 25
     ingest_interval_sec: int = 90
 
@@ -84,19 +84,34 @@ async def _validate_benzinga(key: str) -> bool:
         return False
 
 
+async def _post_key_tasks(groq_key: str) -> None:
+    """Run after keys are stored: refresh keywords if no cache exists, then ingest."""
+    from backend.api.feed import refresh_keywords, ingest_all_sources
+
+    if groq_key:
+        kw = db.get_latest_keywords()
+        if not kw:
+            logger.info('[health] No keyword cache — triggering immediate refresh.')
+            await refresh_keywords(force=True)
+        else:
+            logger.info('[health] Keyword cache exists — skipping forced refresh.')
+
+    await ingest_all_sources()
+
+
 @router.post('/health')
 async def post_health(payload: KeysPayload):
     keys_dict = {
-        'finnhub_key':          payload.finnhub_key,
-        'alpaca_key':           payload.alpaca_key,
-        'alpaca_secret':        payload.alpaca_secret,
-        'marketaux_token':      payload.marketaux_token,
-        'groq_key':             payload.groq_key,
-        'benzinga_key':         payload.benzinga_key,
-        'newsapi_key':          payload.newsapi_key,
-        'stockgeist_token':     payload.stockgeist_token,
-        'groq_rpm':             payload.groq_rpm,
-        'ingest_interval_sec':  payload.ingest_interval_sec,
+        'finnhub_key':         payload.finnhub_key,
+        'alpaca_key':          payload.alpaca_key,
+        'alpaca_secret':       payload.alpaca_secret,
+        'marketaux_token':     payload.marketaux_token,
+        'groq_key':            payload.groq_key,
+        'benzinga_key':        payload.benzinga_key,
+        'newsapi_key':         payload.newsapi_key,
+        'stockgeist_token':    payload.stockgeist_token,
+        'groq_rpm':            payload.groq_rpm,
+        'ingest_interval_sec': payload.ingest_interval_sec,
     }
     config.set_keys(keys_dict)
 
@@ -109,7 +124,7 @@ async def post_health(payload: KeysPayload):
         'newsapi':   await _validate_newsapi(payload.newsapi_key),
     }
 
-    # Apply new ingest interval dynamically
+    # Reschedule ingest interval if changed
     try:
         from backend.main import scheduler
         job = scheduler.get_job('ingest_all_sources')
@@ -119,6 +134,9 @@ async def post_health(payload: KeysPayload):
             logger.info(f'[health] Ingest interval updated to {payload.ingest_interval_sec}s')
     except Exception as e:
         logger.warning(f'[health] Could not reschedule ingest: {e}')
+
+    # Fire keyword refresh + ingest in background now that keys are available
+    asyncio.create_task(_post_key_tasks(payload.groq_key))
 
     logger.info(f'[health] Keys stored. Validation: {validated}')
     return {'status': 'ok', 'validated': validated}
