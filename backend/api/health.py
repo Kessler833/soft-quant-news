@@ -20,6 +20,8 @@ class KeysPayload(BaseModel):
     stockgeist_token: str = ''
     groq_rpm: int = 25
     ingest_interval_sec: int = 90
+    local_llm_url: str = ''
+    local_llm_model: str = ''
 
 
 async def _validate_finnhub(key: str) -> bool:
@@ -112,6 +114,8 @@ async def post_health(payload: KeysPayload):
         'stockgeist_token':    payload.stockgeist_token,
         'groq_rpm':            payload.groq_rpm,
         'ingest_interval_sec': payload.ingest_interval_sec,
+        'local_llm_url':       payload.local_llm_url,
+        'local_llm_model':     payload.local_llm_model,
     }
     config.set_keys(keys_dict)
 

@@ -17,10 +17,42 @@ _ai_sem = asyncio.Semaphore(5)
 
 # ── Unified AI call: Groq first, Gemini if available ──────────────────────────
 
+async def _local_llm_call(prompt_text: str) -> str:
+    """Call a local OpenAI-compatible LLM (Ollama, LM Studio, etc.)."""
+    import httpx
+    local_url = config.get('local_llm_url', '')
+    local_model = config.get('local_llm_model', 'llama3.1:8b')
+
+    endpoint = local_url.rstrip('/')
+    if not endpoint.endswith('/v1/chat/completions'):
+        endpoint = endpoint.rstrip('/') + '/v1/chat/completions'
+
+    async with _ai_sem:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                endpoint,
+                json={
+                    'model': local_model,
+                    'messages': [{'role': 'user', 'content': prompt_text}],
+                    'temperature': 0.2,
+                    'max_tokens': 2048,
+                },
+            )
+            r.raise_for_status()
+            return r.json()['choices'][0]['message']['content'].strip()
+
+
 async def _ai_call(prompt_text: str) -> str:
-    """Call Groq (preferred, already configured) or fall back to Gemini."""
+    """Call local LLM first, then Groq, then Gemini."""
+    local_url  = config.get('local_llm_url', '')
     groq_key   = config.get('groq_key', '')
     gemini_key = config.get('gemini_key', '')
+
+    if local_url:
+        try:
+            return await _local_llm_call(prompt_text)
+        except Exception as e:
+            logger.warning(f'[ai] Local LLM failed ({e}), trying next provider...')
 
     if groq_key:
         return await _groq_call(prompt_text, groq_key)

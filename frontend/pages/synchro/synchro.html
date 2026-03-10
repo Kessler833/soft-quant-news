@@ -48,6 +48,22 @@
       <div id="synchro-save-msg" style="margin-top:8px;"></div>
     </div>
 
+    <!-- Local LLM -->
+    <div style="margin-bottom:24px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Local LLM <span style="font-size:10px;color:var(--text-muted);">(Ollama / LM Studio / llama.cpp)</span></div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">
+        Run AI news grading locally instead of using Groq cloud. Requires an OpenAI-compatible server running on your machine.
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Local LLM URL</label>
+        <input id="key-local-llm-url" class="synchro-input" type="text" placeholder="http://localhost:11434"/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Local LLM Model</label>
+        <input id="key-local-llm-model" class="synchro-input" type="text" placeholder="llama3.1:8b"/>
+      </div>
+    </div>
+
     <!-- Rate Limit Planner -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Rate Limit Planner</div>

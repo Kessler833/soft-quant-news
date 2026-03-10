@@ -268,6 +268,60 @@ Return ONLY a valid JSON array. No markdown."""
     return []
 
 
+# ── Local LLM enrichment ────────────────────────────────────────────────────────
+
+async def local_llm_filter_batch(batch: list) -> list:
+    if not batch:
+        return []
+    local_url = config.get('local_llm_url', '')
+    if not local_url:
+        return []
+    local_model = config.get('local_llm_model', 'llama3.1:8b')
+
+    # Build the same prompt as groq_filter_batch
+    headlines_json = json.dumps([{'id': a['id'], 'title': a['title'], 'source': a['source']} for a in batch])
+    prompt = f"""You are filtering financial news for a US equity day trader.
+For EACH headline return a JSON array. Each element:
+- "id": exact id string
+- "relevance": "HIGH" | "MEDIUM" | "LOW" | "IGNORE"
+- "tickers": array of affected US stock symbols e.g. ["SPY","NVDA"]
+- "sentiment": "Bullish" | "Bearish" | "Neutral"
+- "impact_score": integer 1-10
+- "catalyst_type": "Earnings"|"Fed"|"Macro"|"Analyst"|"M&A"|"Regulatory"|"Geopolitical"|"Other"
+- "summary": one trader-focused sentence (empty string if IGNORE or LOW)
+
+Input:
+{headlines_json}
+
+Return ONLY a valid JSON array. No markdown."""
+
+    # Normalize URL: ensure it ends with /v1/chat/completions
+    endpoint = local_url.rstrip('/')
+    if not endpoint.endswith('/v1/chat/completions'):
+        endpoint = endpoint.rstrip('/') + '/v1/chat/completions'
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                endpoint,
+                json={
+                    'model': local_model,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                    'temperature': 0.1,
+                    'max_tokens': 1536,
+                },
+            )
+            r.raise_for_status()
+            text = r.json()['choices'][0]['message']['content'].strip()
+            if text.startswith('```'):
+                text = re.sub(r'^```[a-z]*\n?', '', text)
+                text = re.sub(r'```$', '', text).strip()
+            return json.loads(text)
+    except Exception as e:
+        logger.warning(f'[feed] Local LLM enrichment failed: {e}')
+        return []
+
+
 # ── Source fetchers (Finnhub only) ──────────────────────────────────────────────
 
 def _make_id(title):
@@ -348,17 +402,27 @@ async def ingest_all_sources() -> None:
     for article in new_articles:
         article.update(rule_score(article))
 
-    if groq_key:
-        to_enrich = [a for a in new_articles if a['relevance'] != 'IGNORE']
-        if to_enrich:
-            batch = to_enrich[:15]
+    local_llm_url = config.get('local_llm_url', '')
+    to_enrich = [a for a in new_articles if a['relevance'] != 'IGNORE']
+    if to_enrich and (local_llm_url or groq_key):
+        batch = to_enrich[:15]
+        ai_results = []
+
+        # Try local LLM first, fall back to Groq
+        if local_llm_url:
+            _emit_status(f'ai: Local LLM enriching {len(batch)} articles...')
+            ai_results = await local_llm_filter_batch(batch)
+
+        if not ai_results and groq_key:
             _emit_status(f'ai: Groq enriching {len(batch)} articles...')
-            groq_results = await groq_filter_batch(batch)
-            groq_map = {g['id']: g for g in groq_results if isinstance(g, dict)}
+            ai_results = await groq_filter_batch(batch)
+
+        if ai_results:
+            ai_map = {g['id']: g for g in ai_results if isinstance(g, dict)}
             enriched = 0
             for article in batch:
-                if article['id'] in groq_map:
-                    g = groq_map[article['id']]
+                if article['id'] in ai_map:
+                    g = ai_map[article['id']]
                     article['relevance']     = g.get('relevance',     article['relevance'])
                     article['tickers']       = json.dumps(g.get('tickers', []))
                     article['sentiment']     = g.get('sentiment',     article['sentiment'])

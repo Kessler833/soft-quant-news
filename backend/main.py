@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from data import db
+from data import config, db
 from backend.api import health, feed, analysis, watchlist, prices, calendar, ai_routes, polymarket, websocket
 
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +17,7 @@ scheduler = AsyncIOScheduler()
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     db.init_db()
+    config.load_keys_from_disk()
     logger.info('[main] Database initialised.')
 
     from backend.api.feed import ingest_all_sources, refresh_keywords

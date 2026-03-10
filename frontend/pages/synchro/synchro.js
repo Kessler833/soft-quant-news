@@ -66,13 +66,15 @@ async function _synchroPushKeysToBackend() {
 function _synchroLoadFields() {
   const keys = QuantCache.loadApiKeys()
   const rate = QuantCache.loadRateSettings()
-  _set('key-alpaca-key',    keys.alpaca_key      || '')
-  _set('key-alpaca-secret', keys.alpaca_secret   || '')
-  _set('key-groq',          keys.groq_key        || '')
-  _set('key-finnhub',       keys.finnhub_key     || '')
-  _set('key-newsapi',       keys.newsapi_key     || '')
-  _set('key-marketaux',     keys.marketaux_token || '')
-  _set('key-base-url',      keys.base_url        || '')
+  _set('key-alpaca-key',      keys.alpaca_key      || '')
+  _set('key-alpaca-secret',   keys.alpaca_secret   || '')
+  _set('key-groq',            keys.groq_key        || '')
+  _set('key-finnhub',         keys.finnhub_key     || '')
+  _set('key-newsapi',         keys.newsapi_key     || '')
+  _set('key-marketaux',       keys.marketaux_token || '')
+  _set('key-base-url',        keys.base_url        || '')
+  _set('key-local-llm-url',   keys.local_llm_url   || '')
+  _set('key-local-llm-model', keys.local_llm_model || '')
   if (rate.from)    _set('rate-from',  rate.from)
   if (rate.until)   _set('rate-until', rate.until)
   if (rate.alwaysOn !== undefined) {
@@ -205,6 +207,8 @@ async function _synchroSave() {
     newsapi_key:         _get('key-newsapi'),
     marketaux_token:     _get('key-marketaux'),
     base_url:            _get('key-base-url'),
+    local_llm_url:       _get('key-local-llm-url'),
+    local_llm_model:     _get('key-local-llm-model'),
     groq_rpm:            rate.groqRpm     || 25,
     ingest_interval_sec: rate.intervalSec || 90,
   }

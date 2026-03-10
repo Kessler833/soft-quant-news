@@ -62,12 +62,13 @@ async def get_sentiment():
     watchlist = db.get_watchlist()
     per_ticker = {}
     for ticker in watchlist:
-        tickers_field = a.get('tickers', [])
-        ticker_arts = [
-            a for a in all_articles
-            if ticker in (tickers_field if isinstance(tickers_field, list) else json.loads(tickers_field or '[]'))
-            for tickers_field in [a.get('tickers', [])]
-        ]
+        ticker_arts = []
+        for a in all_articles:
+            tickers_field = a.get('tickers', [])
+            if isinstance(tickers_field, str):
+                tickers_field = json.loads(tickers_field or '[]')
+            if ticker in tickers_field:
+                ticker_arts.append(a)
         per_ticker[ticker] = round(_overall(ticker_arts), 2)
 
     return {
@@ -76,6 +77,11 @@ async def get_sentiment():
         'per_ticker': per_ticker,
         'timestamp':  now.isoformat(),
     }
+
+
+@router.get('/wsb')
+async def get_wsb():
+    return []
 
 
 @router.get('/heatmap')
