@@ -1,0 +1,100 @@
+#page-calendar {
+  flex-direction: row;
+  overflow: hidden;
+}
+#cal-left,
+#cal-right {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.cal-event {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--bg-tertiary);
+  margin-bottom: 8px;
+  background: var(--bg-secondary);
+  transition: border-color 0.2s;
+}
+.cal-event--today {
+  border-left: 3px solid var(--accent-orange);
+}
+.cal-event--soon {
+  border-left: 3px solid var(--accent-blue);
+}
+.cal-event--past {
+  opacity: 0.45;
+}
+.cal-event-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.cal-event-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+.cal-event-countdown {
+  font-size: 11px;
+  color: var(--accent-orange);
+  font-weight: 600;
+}
+
+/* Countdown display */
+#cal-countdown .countdown-box {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+#cal-countdown .countdown-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 10px 16px;
+  min-width: 56px;
+}
+#cal-countdown .countdown-num {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent-blue);
+  line-height: 1;
+}
+#cal-countdown .countdown-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 4px;
+}
+#cal-countdown .countdown-event-name {
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  padding: 6px 0;
+}
+
+/* Poly alerts */
+.poly-alert-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bg-tertiary);
+}
+.poly-alert-row:last-child { border-bottom: none; }
+.poly-alert-question { font-size: 12px; color: var(--text-primary); }
+.poly-alert-delta {
+  font-size: 12px;
+  font-weight: 700;
+}
+.poly-alert-delta--up   { color: var(--accent-green); }
+.poly-alert-delta--down { color: var(--accent-red); }

@@ -1,0 +1,35 @@
+<div id="ai-left" style="display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--bg-tertiary);">
+
+  <div id="ai-chat-messages" style="flex:1;overflow-y:auto;padding:12px 14px;"></div>
+
+  <div id="ai-chat-input-row" style="
+    display:flex;gap:8px;align-items:center;
+    padding:10px 14px;
+    border-top:1px solid var(--bg-tertiary);
+    flex-shrink:0;
+  ">
+    <input
+      id="ai-chat-input"
+      class="ai-input"
+      type="text"
+      placeholder="Ask about the market..."
+    />
+    <select id="ai-ctx-hours" class="ai-select">
+      <option value="2">2h context</option>
+      <option value="4" selected>4h context</option>
+      <option value="8">8h context</option>
+      <option value="24">24h context</option>
+    </select>
+    <button id="ai-chat-send" class="ai-btn ai-btn--primary">Send</button>
+  </div>
+</div>
+
+<div id="ai-right" style="display:flex;flex-direction:column;overflow:hidden;">
+  <div class="panel-header">&#10022; Pre-Market Brief</div>
+  <div id="ai-brief-wrap" style="flex:1;overflow-y:auto;padding:12px 14px;">
+    <div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px;"><div class="spinner"></div> Loading brief...</div>
+  </div>
+  <div style="border-top:1px solid var(--bg-tertiary);padding:10px 14px;flex-shrink:0;">
+    <button id="ai-refresh-brief" class="ai-btn">&#8635; Regenerate Brief</button>
+  </div>
+</div>

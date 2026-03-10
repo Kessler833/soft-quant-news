@@ -1,0 +1,73 @@
+<div id="synchro-wrap" style="overflow-y:auto;height:100%;padding:20px 24px;">
+
+  <div style="max-width:680px;margin:0 auto;">
+
+    <div style="margin-bottom:20px;">
+      <div style="font-size:16px;font-weight:700;color:var(--accent-blue);margin-bottom:4px;">&#8857; Synchro &mdash; System Configuration</div>
+      <div style="font-size:12px;color:var(--text-muted);">API keys are stored locally in your browser (localStorage). They are never sent to any third party.</div>
+    </div>
+
+    <!-- System Status -->
+    <div style="margin-bottom:20px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">System Status</div>
+      <div id="synchro-status-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+      <button id="synchro-check-btn" class="synchro-btn" style="margin-top:10px;">&#8635; Re-check All</button>
+    </div>
+
+    <!-- API Keys -->
+    <div style="margin-bottom:20px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">API Keys</div>
+
+      <div class="synchro-field-group">
+        <label class="synchro-label">Alpaca API Key ID</label>
+        <input id="key-alpaca-id" class="synchro-input" type="text" placeholder="PK..."/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Alpaca Secret Key</label>
+        <input id="key-alpaca-secret" class="synchro-input" type="password" placeholder="&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;"/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Gemini API Key</label>
+        <input id="key-gemini" class="synchro-input" type="password" placeholder="AIza..."/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Reddit Client ID</label>
+        <input id="key-reddit-id" class="synchro-input" type="text" placeholder="Reddit client_id"/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Reddit Client Secret</label>
+        <input id="key-reddit-secret" class="synchro-input" type="password" placeholder="Reddit client_secret"/>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button id="synchro-save-btn" class="synchro-btn synchro-btn--primary">&#10003; Save &amp; Apply</button>
+        <button id="synchro-clear-btn" class="synchro-btn">&#10005; Clear All Keys</button>
+      </div>
+      <div id="synchro-save-msg" style="margin-top:8px;"></div>
+    </div>
+
+    <!-- Backend Config -->
+    <div style="margin-bottom:20px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Backend URL</div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Base URL</label>
+        <input id="key-base-url" class="synchro-input" type="text" placeholder="http://localhost:8000" />
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Default: http://localhost:8000 &mdash; change only if running backend on a different port.</div>
+    </div>
+
+    <!-- Feed Stats -->
+    <div style="margin-bottom:20px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Feed Statistics</div>
+      <div id="synchro-stats" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+    </div>
+
+    <!-- Danger Zone -->
+    <div style="margin-bottom:20px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;color:var(--accent-red);">&#9888; Danger Zone</div>
+      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">Reset All Cached Settings</button>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears localStorage. Does not affect backend database.</div>
+    </div>
+
+  </div>
+</div>
