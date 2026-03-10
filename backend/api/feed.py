@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -134,6 +135,7 @@ async def refresh_keywords(force: bool = False) -> None:
 
     logger.info(f'[feed] Requesting keyword refresh (force={force})...')
     _emit_status('ai: Generating market-aware filter keywords...')
+    t0_kw = time.time()
 
     prompt = """You are a financial news filter for a US equity day trader.
 Based on CURRENT macro market conditions, generate keyword lists for filtering financial news headlines.
@@ -173,7 +175,8 @@ LOW = 15-20 keywords for marginally relevant news worth tracking."""
                 parsed.get('context_note', ''),
             )
             _cached_kw['_loaded_at'] = None
-            _emit_status('done: Filter keywords updated — AI context applied')
+            elapsed_kw = round(time.time() - t0_kw, 1)
+            _emit_status(f'done: Filter keywords updated in {elapsed_kw}s — AI context applied')
             logger.info('[feed] Keywords refreshed from Groq.')
     except Exception as e:
         _emit_status('idle: Keyword refresh failed — using base keywords')
@@ -386,6 +389,8 @@ async def ingest_all_sources() -> None:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
 
+    _emit_status(f'fetching: Fetched {len(all_articles)} articles total from {len(tasks)} sources')
+
     existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
     new_articles = [a for a in all_articles if a['id'] not in existing_ids]
 
@@ -409,6 +414,7 @@ async def ingest_all_sources() -> None:
         ai_results = []
 
         # Try local LLM first, fall back to Groq
+        t0_ai = time.time()
         if local_llm_url:
             _emit_status(f'ai: Local LLM enriching {len(batch)} articles...')
             ai_results = await local_llm_filter_batch(batch)
@@ -430,7 +436,8 @@ async def ingest_all_sources() -> None:
                     article['catalyst_type'] = g.get('catalyst_type', article['catalyst_type'])
                     article['summary']       = g.get('summary', '')
                     enriched += 1
-            _emit_status(f'ai: Enriched {enriched}/{len(batch)} articles')
+            elapsed_ai = round(time.time() - t0_ai, 1)
+            _emit_status(f'ai: Enriched {enriched}/{len(batch)} articles in {elapsed_ai}s')
 
     saved = 0
     for article in new_articles:
