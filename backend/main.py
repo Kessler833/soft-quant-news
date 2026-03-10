@@ -26,7 +26,6 @@ async def lifespan(application: FastAPI):
 
     scheduler.add_job(ingest_all_sources,       'interval', seconds=60,   id='ingest')
     scheduler.add_job(update_polymarket,         'interval', seconds=300,  id='polymarket')
-    scheduler.add_job(update_wsb_sentiment,      'interval', seconds=900,  id='wsb')
     scheduler.add_job(generate_macro_narrative,  'interval', seconds=1800, id='macro_narrative')
     scheduler.add_job(
         generate_premarket_brief,
@@ -54,8 +53,6 @@ app.add_middleware(
 )
 
 # Routers
-# NOTE: GET /api/health and POST /api/health are both defined inside health.router.
-# Do NOT add a duplicate @app.get('/api/health') here.
 app.include_router(health.router,     prefix='/api')
 app.include_router(feed.router,       prefix='/api/feed')
 app.include_router(analysis.router,   prefix='/api/analysis')

@@ -20,26 +20,21 @@ function _synchroLoadFields() {
   _set('key-alpaca-id',     keys.alpaca_key_id     || '')
   _set('key-alpaca-secret', keys.alpaca_secret_key || '')
   _set('key-gemini',        keys.gemini_api_key    || '')
-  _set('key-reddit-id',     keys.reddit_client_id  || '')
-  _set('key-reddit-secret', keys.reddit_client_secret || '')
   _set('key-base-url',      keys.base_url          || '')
 }
 
 async function _synchroSave() {
   const apiKeys = {
-    alpaca_key_id:        _get('key-alpaca-id'),
-    alpaca_secret_key:    _get('key-alpaca-secret'),
-    gemini_api_key:       _get('key-gemini'),
-    reddit_client_id:     _get('key-reddit-id'),
-    reddit_client_secret: _get('key-reddit-secret'),
-    base_url:             _get('key-base-url'),
+    alpaca_key_id:     _get('key-alpaca-id'),
+    alpaca_secret_key: _get('key-alpaca-secret'),
+    gemini_api_key:    _get('key-gemini'),
+    base_url:          _get('key-base-url'),
   }
   QuantCache.saveApi(apiKeys)
 
   const msg = document.getElementById('synchro-save-msg')
 
   try {
-    // Send to backend
     const result = await apiHealth(apiKeys)
     if (msg) {
       msg.innerHTML = '<div class="notification notification--success">&#10003; Saved. Backend acknowledged.</div>'
@@ -47,7 +42,7 @@ async function _synchroSave() {
     }
     await _synchroCheckAll()
   } catch (e) {
-    QuantCache.saveApi(apiKeys)  // still save locally even if backend offline
+    QuantCache.saveApi(apiKeys)
     if (msg) {
       msg.innerHTML = `<div class="notification notification--warning">Saved locally. Backend offline: ${e.message}</div>`
       setTimeout(() => { if (msg) msg.innerHTML = '' }, 5000)
@@ -71,18 +66,15 @@ async function _synchroCheckAll() {
     { name: 'WebSocket',  fn: () => _wsCheck() },
     { name: 'Alpaca',     fn: () => _keyCheck('alpaca_key_id') },
     { name: 'Gemini',     fn: () => _keyCheck('gemini_api_key') },
-    { name: 'Reddit',     fn: () => _keyCheck('reddit_client_id') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
   ]
 
-  // Render loading tiles
   grid.innerHTML = checks.map(c => `
     <div class="status-tile">
       <span class="status-tile-name">${c.name}</span>
       <span class="status-tile-val status-check" id="status-${c.name.toLowerCase()}"><div class="spinner" style="display:inline-block;"></div></span>
     </div>`).join('')
 
-  // Run all checks in parallel
   await Promise.allSettled(checks.map(async c => {
     const el = document.getElementById('status-' + c.name.toLowerCase())
     try {
