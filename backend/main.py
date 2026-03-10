@@ -21,7 +21,7 @@ async def lifespan(application: FastAPI):
 
     from backend.api.feed import ingest_all_sources
     from backend.api.polymarket import update_polymarket
-    from backend.api.analysis import update_wsb_sentiment, generate_macro_narrative
+    from backend.api.analysis import generate_macro_narrative
     from backend.api.ai_routes import generate_premarket_brief
 
     scheduler.add_job(ingest_all_sources,       'interval', seconds=60,   id='ingest')
