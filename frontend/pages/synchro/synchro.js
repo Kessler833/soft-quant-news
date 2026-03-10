@@ -73,6 +73,8 @@ async function _synchroCheckAll() {
     { name: 'Alpaca',     fn: () => _keyCheck('alpaca_key') },
     { name: 'Gemini',     fn: () => _keyCheck('gemini_key') },
     { name: 'Finnhub',    fn: () => _keyCheck('finnhub_key') },
+    { name: 'NewsAPI',    fn: () => _keyCheck('newsapi_key') },
+    { name: 'Marketaux',  fn: () => _keyCheck('marketaux_token') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
   ]
 
