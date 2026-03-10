@@ -68,6 +68,15 @@ def init_db() -> None:
                 price_30min   REAL,
                 tracked_at    TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS keyword_cache (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                high_kw      TEXT,
+                medium_kw    TEXT,
+                low_kw       TEXT,
+                context_note TEXT,
+                generated_at TEXT
+            );
         """)
         conn.commit()
         conn.close()
@@ -104,8 +113,6 @@ def save_article(article: dict) -> None:
 
 
 def save_drift(article_id: str, ticker: str, minutes: int, price: float) -> None:
-    """Upsert a price drift measurement. Called by feed._track_drift.
-    Uses internal lock — callers must NOT hold _lock themselves."""
     col_map = {5: 'price_5min', 15: 'price_15min', 30: 'price_30min'}
     col = col_map.get(minutes)
     if col is None:
@@ -113,31 +120,18 @@ def save_drift(article_id: str, ticker: str, minutes: int, price: float) -> None
     with _lock:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            'SELECT id FROM drift_tracking WHERE article_id=? AND ticker=?',
-            (article_id, ticker)
-        )
+        cur.execute('SELECT id FROM drift_tracking WHERE article_id=? AND ticker=?', (article_id, ticker))
         row = cur.fetchone()
         if row:
-            cur.execute(
-                f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?',
-                (price, article_id, ticker)
-            )
+            cur.execute(f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?', (price, article_id, ticker))
         else:
-            cur.execute(
-                'INSERT INTO drift_tracking (article_id, ticker, tracked_at) VALUES (?,?,?)',
-                (article_id, ticker, datetime.now(timezone.utc).isoformat())
-            )
-            cur.execute(
-                f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?',
-                (price, article_id, ticker)
-            )
+            cur.execute('INSERT INTO drift_tracking (article_id, ticker, tracked_at) VALUES (?,?,?)', (article_id, ticker, datetime.now(timezone.utc).isoformat()))
+            cur.execute(f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?', (price, article_id, ticker))
         conn.commit()
         conn.close()
 
 
 def _row_to_article(row, columns) -> dict:
-    """Convert a DB row to an article dict, always parsing tickers to a list."""
     d = dict(zip(columns, row))
     tickers_raw = d.get('tickers', '[]')
     if isinstance(tickers_raw, list):
@@ -169,7 +163,6 @@ def get_latest_articles(
     query = 'SELECT * FROM articles'
     conditions = []
     params = []
-
     if relevance_filter:
         conditions.append('relevance = ?')
         params.append(relevance_filter.upper())
@@ -182,12 +175,10 @@ def get_latest_articles(
     if ticker_filter:
         conditions.append("tickers LIKE ?")
         params.append(f'%{ticker_filter.upper()}%')
-
     if conditions:
         query += ' WHERE ' + ' AND '.join(conditions)
     query += ' ORDER BY published_at DESC LIMIT ?'
     params.append(limit)
-
     cur.execute(query, params)
     rows = cur.fetchall()
     conn.close()
@@ -198,10 +189,7 @@ def get_articles_since(hours: int = 4) -> list:
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        'SELECT * FROM articles WHERE published_at >= ? ORDER BY published_at DESC',
-        (since,)
-    )
+    cur.execute('SELECT * FROM articles WHERE published_at >= ? ORDER BY published_at DESC', (since,))
     rows = cur.fetchall()
     conn.close()
     return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
@@ -210,10 +198,7 @@ def get_articles_since(hours: int = 4) -> list:
 def get_articles_for_ticker(ticker: str) -> list:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "SELECT * FROM articles WHERE tickers LIKE ? ORDER BY published_at DESC LIMIT 50",
-        (f'%{ticker.upper()}%',)
-    )
+    cur.execute("SELECT * FROM articles WHERE tickers LIKE ? ORDER BY published_at DESC LIMIT 50", (f'%{ticker.upper()}%',))
     rows = cur.fetchall()
     conn.close()
     return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
@@ -232,10 +217,7 @@ def set_ai_cache(key: str, content: str) -> None:
     with _lock:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            'INSERT OR REPLACE INTO ai_cache (key, content, generated_at) VALUES (?,?,?)',
-            (key, content, datetime.now(timezone.utc).isoformat())
-        )
+        cur.execute('INSERT OR REPLACE INTO ai_cache (key, content, generated_at) VALUES (?,?,?)', (key, content, datetime.now(timezone.utc).isoformat()))
         conn.commit()
         conn.close()
 
@@ -253,10 +235,7 @@ def add_to_watchlist(ticker: str) -> None:
     with _lock:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute(
-            'INSERT OR IGNORE INTO watchlist (ticker, added_at) VALUES (?,?)',
-            (ticker.upper(), datetime.now(timezone.utc).isoformat())
-        )
+        cur.execute('INSERT OR IGNORE INTO watchlist (ticker, added_at) VALUES (?,?)', (ticker.upper(), datetime.now(timezone.utc).isoformat()))
         conn.commit()
         conn.close()
 
@@ -276,19 +255,8 @@ def save_polymarket_markets(markets: list) -> None:
         cur = conn.cursor()
         for m in markets:
             cur.execute(
-                """
-                INSERT OR REPLACE INTO polymarket_markets
-                  (id, question, probability, volume, prev_probability, updated_at)
-                VALUES (?,?,?,?,?,?)
-                """,
-                (
-                    m.get('id'),
-                    m.get('question'),
-                    m.get('probability', 0.0),
-                    m.get('volume', 0.0),
-                    m.get('prev_probability', m.get('probability', 0.0)),
-                    datetime.now(timezone.utc).isoformat(),
-                )
+                "INSERT OR REPLACE INTO polymarket_markets (id, question, probability, volume, prev_probability, updated_at) VALUES (?,?,?,?,?,?)",
+                (m.get('id'), m.get('question'), m.get('probability', 0.0), m.get('volume', 0.0), m.get('prev_probability', m.get('probability', 0.0)), datetime.now(timezone.utc).isoformat())
             )
         conn.commit()
         conn.close()
@@ -297,10 +265,7 @@ def save_polymarket_markets(markets: list) -> None:
 def get_polymarket_markets() -> list:
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        'SELECT id, question, probability, volume, prev_probability, updated_at '
-        'FROM polymarket_markets ORDER BY volume DESC'
-    )
+    cur.execute('SELECT id, question, probability, volume, prev_probability, updated_at FROM polymarket_markets ORDER BY volume DESC')
     rows = cur.fetchall()
     conn.close()
     columns = ['id', 'question', 'probability', 'volume', 'prev_probability', 'updated_at']
@@ -309,8 +274,36 @@ def get_polymarket_markets() -> list:
 
 def get_polymarket_alerts(threshold: float = 0.05) -> list:
     markets = get_polymarket_markets()
-    return [
-        m for m in markets
-        if m['prev_probability'] is not None
-        and abs(m['probability'] - m['prev_probability']) > threshold
-    ]
+    return [m for m in markets if m['prev_probability'] is not None and abs(m['probability'] - m['prev_probability']) > threshold]
+
+
+def get_latest_keywords():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute('SELECT high_kw, medium_kw, low_kw, context_note, generated_at FROM keyword_cache ORDER BY id DESC LIMIT 1')
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        return {
+            'high_kw':      json.loads(row[0] or '[]'),
+            'medium_kw':    json.loads(row[1] or '[]'),
+            'low_kw':       json.loads(row[2] or '[]'),
+            'context_note': row[3] or '',
+            'generated_at': row[4] or '',
+        }
+    except Exception:
+        return None
+
+
+def save_keywords(high: list, medium: list, low: list, context_note: str) -> None:
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO keyword_cache (high_kw, medium_kw, low_kw, context_note, generated_at) VALUES (?,?,?,?,?)',
+            (json.dumps(high), json.dumps(medium), json.dumps(low), context_note, datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+        conn.close()
