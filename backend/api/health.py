@@ -60,22 +60,17 @@ async def _validate_marketaux(token: str) -> bool:
 
 
 async def _validate_gemini(key: str) -> bool:
+    """Validate by listing models — no generation call, no rate limit burn."""
     if not key:
         return False
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        resp = model.generate_content('say ok', generation_config={'max_output_tokens': 5})
-        return bool(resp.text)
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(
+                f'https://generativelanguage.googleapis.com/v1beta/models?key={key}'
+            )
+            return r.status_code == 200
     except Exception:
-        try:
-            import google.generativeai as genai
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            resp = model.generate_content('say ok', generation_config={'max_output_tokens': 5})
-            return bool(resp.text)
-        except Exception:
-            return False
+        return False
 
 
 async def _validate_benzinga(key: str) -> bool:
@@ -129,10 +124,9 @@ async def post_health(payload: KeysPayload):
         'newsapi_key':       payload.newsapi_key,
         'stockgeist_token':  payload.stockgeist_token,
     }
-    # Store all keys regardless of validation result
     config.set_keys(keys_dict)
 
-    # Configure Gemini globally if key provided
+    # Pre-configure Gemini SDK globally if key provided
     if payload.gemini_key:
         try:
             import google.generativeai as genai
