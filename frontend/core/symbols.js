@@ -7,7 +7,7 @@ const COMMON_TICKERS = [
   // Mega-cap Tech
   'AAPL','MSFT','NVDA','META','GOOGL','GOOG','AMZN','TSLA','AMD','INTC','QCOM','AVGO',
   // Finance
-  'JPM','GS','BAC','WFC','MS','C','BRK.B',
+  'JPM','GS','BAC','WFC','MS','C','BRK',
   // Energy
   'XOM','CVX','COP','SLB',
   // Health
@@ -15,7 +15,7 @@ const COMMON_TICKERS = [
   // Industrial
   'BA','CAT','GE','HON',
   // Consumer
-  'WMT','TGT','COST','AMZN',
+  'WMT','TGT','COST',
   // Real Estate / Utilities
   'SPG','AMT','PLD','NEE','DUK',
   // Materials
@@ -25,7 +25,6 @@ const COMMON_TICKERS = [
 ]
 
 ;(function () {
-  // Build modal DOM once
   const modal = document.createElement('div')
   modal.id = 'symbol-browser-modal'
   modal.className = 'modal'
@@ -76,10 +75,12 @@ const COMMON_TICKERS = [
   }
 
   function selectSymbol(ticker) {
+    // Sanitise: remove any non-alphanumeric chars so e.g. BRK.B -> BRKB doesn't break backend
+    const clean = ticker.replace(/[^A-Z0-9]/g, '')
     if (_targetInputId) {
       const input = document.getElementById(_targetInputId)
       if (input) {
-        input.value = ticker
+        input.value = clean
         input.dispatchEvent(new Event('input', { bubbles: true }))
         input.dispatchEvent(new Event('change', { bubbles: true }))
       }
@@ -101,24 +102,20 @@ const COMMON_TICKERS = [
     _targetInputId = null
   }
 
-  // Search filtering
   document.getElementById('symbol-search-input').addEventListener('input', e => {
     renderGrid(e.target.value)
   })
 
   document.getElementById('symbol-modal-close').addEventListener('click', closeModal)
 
-  // Close on backdrop click
   modal.addEventListener('click', e => {
     if (e.target === modal) closeModal()
   })
 
-  // Close on Escape
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && modal.classList.contains('open')) closeModal()
   })
 
-  // Delegate: open on any .open-symbol-browser click
   document.addEventListener('click', e => {
     const btn = e.target.closest('.open-symbol-browser')
     if (btn) {

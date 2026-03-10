@@ -1,10 +1,11 @@
 <div id="wl-left" style="overflow-y:auto;border-right:1px solid var(--bg-tertiary);">
   <div class="panel-header">&#9678; Watchlist</div>
   <div id="wl-add-row" style="padding:10px 14px;border-bottom:1px solid var(--bg-tertiary);display:flex;gap:8px;align-items:center;">
-    <input id="wl-input" class="wl-input" type="text" placeholder="Add ticker..." maxlength="6" />
-    <button class="open-symbol-browser wl-btn" data-target="wl-input">&#9672;</button>
+    <input id="wl-input" class="wl-input" type="text" placeholder="Add ticker... e.g. AAPL" maxlength="6" />
+    <button class="open-symbol-browser wl-btn" data-target="wl-input" title="Browse symbols">&#9672;</button>
     <button id="wl-add-btn" class="wl-btn wl-btn--primary">+ Add</button>
   </div>
+  <div id="wl-msg" style="padding:4px 14px;"></div>
   <div id="wl-list" style="padding:8px 14px;"></div>
 </div>
 

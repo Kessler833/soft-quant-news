@@ -24,6 +24,7 @@ async def lifespan(application: FastAPI):
     from backend.api.analysis import generate_macro_narrative
     from backend.api.ai_routes import generate_premarket_brief
 
+    # ── Scheduled jobs ────────────────────────────────────────────────────
     scheduler.add_job(ingest_all_sources,       'interval', seconds=60,   id='ingest')
     scheduler.add_job(update_polymarket,         'interval', seconds=300,  id='polymarket')
     scheduler.add_job(generate_macro_narrative,  'interval', seconds=1800, id='macro_narrative')
@@ -34,6 +35,34 @@ async def lifespan(application: FastAPI):
     )
     scheduler.start()
     logger.info('[main] Scheduler started.')
+
+    # ── Immediate startup run (don't wait for first cron tick) ────────────
+    import asyncio
+    async def _startup_tasks():
+        logger.info('[main] Running startup ingest...')
+        try:
+            await ingest_all_sources()
+        except Exception as e:
+            logger.warning(f'[main] Startup ingest error: {e}')
+        logger.info('[main] Running startup polymarket update...')
+        try:
+            await update_polymarket()
+        except Exception as e:
+            logger.warning(f'[main] Startup polymarket error: {e}')
+        logger.info('[main] Running startup macro narrative...')
+        try:
+            await generate_macro_narrative()
+        except Exception as e:
+            logger.warning(f'[main] Startup macro narrative error: {e}')
+        # Only generate brief if none cached yet
+        if not db.get_ai_cache('premarket_brief'):
+            logger.info('[main] No cached brief — generating now...')
+            try:
+                await generate_premarket_brief()
+            except Exception as e:
+                logger.warning(f'[main] Startup brief error: {e}')
+
+    asyncio.create_task(_startup_tasks())
 
     yield
 

@@ -8,6 +8,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 
 from data import config, db
 
@@ -15,6 +16,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _groq_sem = asyncio.Semaphore(1)
+
+# Broadcast ingest status to all SSE listeners
+_status_queues: list[asyncio.Queue] = []
+
+def _emit_status(msg: str):
+    """Push a status string to all connected SSE clients."""
+    dead = []
+    for q in _status_queues:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.append(q)
+    for q in dead:
+        try:
+            _status_queues.remove(q)
+        except ValueError:
+            pass
 
 RSS_FEEDS = [
     'https://rss.forexlive.com',
@@ -74,12 +92,7 @@ def rule_score(article: dict) -> dict:
         relevance = 'IGNORE'
         impact    = 1
 
-    if bull_hits > bear_hits:
-        sentiment = 'Bullish'
-    elif bear_hits > bull_hits:
-        sentiment = 'Bearish'
-    else:
-        sentiment = 'Neutral'
+    sentiment = 'Bullish' if bull_hits > bear_hits else ('Bearish' if bear_hits > bull_hits else 'Neutral')
 
     catalyst = 'Other'
     for cat, keywords in _CATALYST_MAP.items():
@@ -95,7 +108,7 @@ def rule_score(article: dict) -> dict:
     }
 
 
-# ── Groq AI enrichment (optional, rate-limited) ───────────────────────────────
+# ── Groq AI enrichment ────────────────────────────────────────────────────────
 
 async def groq_filter_batch(batch: list) -> list:
     if not batch:
@@ -291,8 +304,10 @@ async def ingest_all_sources() -> None:
     groq_key      = config.get('groq_key', '')
 
     if not any([finnhub_key, marketaux_tok, newsapi_key, benzinga_key]):
-        logger.warning('[feed] No news API keys configured — skipping ingest.')
-        return
+        _emit_status('idle: No news API keys configured')
+        logger.warning('[feed] No news API keys configured — RSS only ingest.')
+
+    _emit_status('fetching: Collecting articles from all sources...')
 
     watchlist_tickers = db.get_watchlist()
     tasks = [_fetch_finnhub_general(finnhub_key) if finnhub_key else _empty_list()]
@@ -313,29 +328,31 @@ async def ingest_all_sources() -> None:
     new_articles = [a for a in all_articles if a['id'] not in existing_ids]
 
     if not new_articles:
+        _emit_status('idle: Feed up to date — no new articles')
         logger.info('[feed] No new articles after dedup.')
         return
 
+    _emit_status(f'scoring: Rule-based scoring {len(new_articles)} articles...')
     logger.info(f'[feed] {len(new_articles)} new articles — applying rule-based filter...')
 
-    # Step 1: rule-based scoring (always, instant, free)
     for article in new_articles:
         scores = rule_score(article)
         article.update(scores)
 
-    # Step 2: Groq AI enrichment (optional, only HIGH+MEDIUM articles)
     if groq_key:
         to_enrich = [a for a in new_articles if a['relevance'] != 'IGNORE']
         if to_enrich:
-            groq_rpm     = int(config.get('groq_rpm', 25))
-            batch_size   = min(25, groq_rpm)  # one batch per cycle
-            batch        = to_enrich[:batch_size]
-            delay_sec    = max(2.5, 60.0 / groq_rpm)
+            groq_rpm   = int(config.get('groq_rpm', 25))
+            batch_size = min(25, groq_rpm)
+            batch      = to_enrich[:batch_size]
+            delay_sec  = max(2.5, 60.0 / groq_rpm)
 
+            _emit_status(f'ai: Groq enriching {len(batch)} of {len(to_enrich)} articles (batch {batch_size})...')
             logger.info(f'[feed] Groq enriching {len(batch)} articles (rpm={groq_rpm})...')
             groq_results = await groq_filter_batch(batch)
             groq_map     = {g['id']: g for g in groq_results if isinstance(g, dict)}
 
+            enriched = 0
             for article in batch:
                 if article['id'] in groq_map:
                     g = groq_map[article['id']]
@@ -345,12 +362,17 @@ async def ingest_all_sources() -> None:
                     article['impact_score']  = g.get('impact_score',  article['impact_score'])
                     article['catalyst_type'] = g.get('catalyst_type', article['catalyst_type'])
                     article['summary']       = g.get('summary',       '')
+                    enriched += 1
 
-            await asyncio.sleep(delay_sec)  # respect rpm
+            _emit_status(f'ai: Groq enriched {enriched}/{len(batch)} articles')
+            await asyncio.sleep(delay_sec)
+    else:
+        _emit_status('scoring: Rule-based only (no Groq key)')
 
-    # Step 3: save + broadcast
+    saved = 0
     for article in new_articles:
         db.save_article(article)
+        saved += 1
         if article.get('relevance') in ('HIGH', 'MEDIUM'):
             from backend.api import websocket as ws_module
             await ws_module.broadcast(article)
@@ -359,7 +381,8 @@ async def ingest_all_sources() -> None:
             for ticker in tickers[:3]:
                 _schedule_drift(article['id'], ticker)
 
-    logger.info(f'[feed] Saved {len(new_articles)} articles.')
+    _emit_status(f'done: Saved {saved} articles ({len([a for a in new_articles if a["relevance"] == "HIGH"])} HIGH, {len([a for a in new_articles if a["relevance"] == "MEDIUM"])} MEDIUM)')
+    logger.info(f'[feed] Saved {saved} articles.')
 
 
 def _schedule_drift(article_id: str, ticker: str) -> None:
@@ -411,3 +434,35 @@ async def get_all(limit: int = 200, relevance: Optional[str] = None,
     return db.get_latest_articles(limit=limit, relevance_filter=relevance,
                                    sentiment_filter=sentiment, catalyst_filter=catalyst,
                                    ticker_filter=ticker)
+
+
+@router.get('/ingest-status')
+async def ingest_status_stream():
+    """SSE endpoint — streams live ingest status messages to the frontend."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    _status_queues.append(q)
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=25)
+                    yield f'data: {msg}\n\n'
+                except asyncio.TimeoutError:
+                    yield 'data: ping\n\n'  # keepalive
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                _status_queues.remove(q)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        }
+    )

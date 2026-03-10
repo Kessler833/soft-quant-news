@@ -35,6 +35,25 @@
   </div>
 </div>
 
+<!-- Ingest Status Bar -->
+<div id="feed-status-bar" style="
+  display:none;
+  align-items:center; gap:8px;
+  padding:5px 14px;
+  background:var(--bg-tertiary);
+  border-bottom:1px solid var(--border);
+  font-size:11px; font-family:'JetBrains Mono',monospace;
+  flex-shrink:0;
+">
+  <div id="feed-status-spinner" class="spinner" style="flex-shrink:0;"></div>
+  <span id="feed-status-text" style="color:var(--text-muted);">Initialising...</span>
+  <span id="feed-status-badge" style="
+    margin-left:auto; font-size:10px; padding:2px 6px;
+    border-radius:3px; background:var(--bg-panel);
+    color:var(--text-muted); border:1px solid var(--border);
+  ">INGEST</span>
+</div>
+
 <div id="feed-list" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>
 
 <!-- Chart Modal -->

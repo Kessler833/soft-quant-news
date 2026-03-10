@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
@@ -11,68 +12,125 @@ from data import config, db
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_gemini_sem = asyncio.Semaphore(5)
+_ai_sem = asyncio.Semaphore(5)
 
 
-async def _get_gemini_model():
-    import google.generativeai as genai
-    key = config.get('gemini_key', '')
-    if key:
-        genai.configure(api_key=key)  # fix: configure at call-time
-    try:
-        return genai.GenerativeModel('gemini-2.0-flash')
-    except Exception:
-        return genai.GenerativeModel('gemini-1.5-flash')
+# ── Unified AI call: Groq first, Gemini if available ──────────────────────────
 
-
-async def _gemini_call(prompt_text: str) -> str:
+async def _ai_call(prompt_text: str) -> str:
+    """Call Groq (preferred, already configured) or fall back to Gemini."""
+    groq_key   = config.get('groq_key', '')
     gemini_key = config.get('gemini_key', '')
-    if not gemini_key:
-        raise ValueError('Gemini API key not configured')
 
-    backoff = [2, 4, 8]
-    async with _gemini_sem:
+    if groq_key:
+        return await _groq_call(prompt_text, groq_key)
+    elif gemini_key:
+        return await _gemini_call(prompt_text, gemini_key)
+    else:
+        raise ValueError('No AI API key configured. Add a Groq key in Synchro.')
+
+
+async def _groq_call(prompt_text: str, groq_key: str) -> str:
+    import httpx
+    backoff = [5, 15, 30]
+    async with _ai_sem:
         for attempt, delay in enumerate(backoff + [None]):
             try:
-                model = await _get_gemini_model()
-                loop = asyncio.get_running_loop()  # fix: get_running_loop
+                async with httpx.AsyncClient(timeout=30) as client:
+                    r = await client.post(
+                        'https://api.groq.com/openai/v1/chat/completions',
+                        headers={
+                            'Authorization': f'Bearer {groq_key}',
+                            'Content-Type': 'application/json',
+                        },
+                        json={
+                            'model': 'llama-3.3-70b-versatile',
+                            'messages': [{'role': 'user', 'content': prompt_text}],
+                            'temperature': 0.2,
+                            'max_tokens': 2048,
+                        }
+                    )
+                if r.status_code == 429:
+                    if delay:
+                        logger.warning(f'[ai] Groq rate limited, retrying in {delay}s...')
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise RuntimeError('Groq rate limit exhausted after retries')
+                r.raise_for_status()
+                return r.json()['choices'][0]['message']['content'].strip()
+            except Exception as e:
+                if delay:
+                    logger.warning(f'[ai] Groq error ({e}), retrying in {delay}s...')
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+    raise RuntimeError('Groq call failed')
+
+
+async def _gemini_call(prompt_text: str, gemini_key: str) -> str:
+    import google.generativeai as genai
+    genai.configure(api_key=gemini_key)
+    backoff = [2, 4, 8]
+    async with _ai_sem:
+        for attempt, delay in enumerate(backoff + [None]):
+            try:
+                try:
+                    model = genai.GenerativeModel('gemini-2.0-flash')
+                except Exception:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
-                    None,
-                    lambda: model.generate_content(prompt_text)
+                    None, lambda: model.generate_content(prompt_text)
                 )
                 if not response.text:
                     raise ValueError('Empty Gemini response')
                 return response.text
             except Exception as e:
-                err_name = type(e).__name__
-                if 'ResourceExhausted' in err_name or '429' in str(e):
+                err = type(e).__name__
+                if 'ResourceExhausted' in err or '429' in str(e):
                     if delay:
                         logger.warning(f'[ai] Gemini rate limited, retrying in {delay}s...')
                         await asyncio.sleep(delay)
+                        continue
                     else:
                         raise
                 else:
                     raise
-    raise RuntimeError('Gemini call failed after all retries')
+    raise RuntimeError('Gemini call failed')
 
+
+def _strip_json(raw: str) -> str:
+    """Remove markdown code fences if present."""
+    text = raw.strip()
+    if text.startswith('```'):
+        text = re.sub(r'^```[a-z]*\n?', '', text)
+        text = re.sub(r'```$', '', text).strip()
+    return text
+
+
+# ── Pre-market brief ──────────────────────────────────────────────────────────
 
 async def generate_premarket_brief() -> None:
-    """Generate structured pre-market brief via Gemini. Called by scheduler at 07:00 UTC."""
+    groq_key   = config.get('groq_key', '')
     gemini_key = config.get('gemini_key', '')
-    if not gemini_key:
-        logger.warning('[ai] No Gemini key — skipping pre-market brief.')
+    if not groq_key and not gemini_key:
+        logger.warning('[ai] No AI key — skipping pre-market brief.')
         return
 
-    articles = db.get_articles_since(hours=12)
+    articles  = db.get_articles_since(hours=12)
     high_med  = [a for a in articles if a.get('relevance') in ('HIGH', 'MEDIUM')]
     headlines = '\n'.join(f"- {a['title']}" for a in high_med[:60])
 
     from backend.api.calendar import get_events
-    events_raw = await get_events()
-    events_str = '\n'.join(
-        f"- {e['name']} at {e.get('datetime_cet','')[:16]} CET (importance: {e['importance']})"
-        for e in events_raw
-    )
+    try:
+        events_raw = await get_events()
+        events_str = '\n'.join(
+            f"- {e['name']} at {e.get('datetime_cet','')[:16]} CET (importance: {e['importance']})"
+            for e in events_raw
+        )
+    except Exception:
+        events_str = 'Calendar unavailable'
 
     prompt = f"""Generate a structured pre-market brief for a US equity day trader.
 Return ONLY this exact JSON, no markdown:
@@ -87,19 +145,14 @@ Return ONLY this exact JSON, no markdown:
 }}
 
 Recent headlines:
-{headlines}
+{headlines if headlines else 'No headlines yet — market just opened or feed is starting.'}
 
 Today's events:
 {events_str}"""
 
     try:
-        raw = await _gemini_call(prompt)
-        text = raw.strip()
-        if text.startswith('```'):
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
-        parsed = json.loads(text.strip())
+        raw    = await _ai_call(prompt)
+        parsed = json.loads(_strip_json(raw))
         db.set_ai_cache('premarket_brief', json.dumps(parsed))
         logger.info('[ai] Pre-market brief generated.')
     except Exception as e:
@@ -107,12 +160,11 @@ Today's events:
 
 
 async def generate_macro_narrative() -> None:
-    """Alias used by main.py scheduler — delegates to analysis module."""
     from backend.api.analysis import generate_macro_narrative as _gen
     await _gen()
 
 
-# ─── Routes ────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get('/premarket-brief')
 async def get_premarket_brief():
@@ -122,6 +174,7 @@ async def get_premarket_brief():
             return json.loads(raw)
         except Exception:
             pass
+    # Nothing cached — generate on-demand
     await generate_premarket_brief()
     raw = db.get_ai_cache('premarket_brief')
     if raw:
@@ -131,9 +184,16 @@ async def get_premarket_brief():
             pass
     return {
         'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
-        'market_bias': 'Neutral', 'bias_rationale': 'Generating...',
+        'market_bias': 'Neutral', 'bias_rationale': 'No AI key configured or still generating.',
         'tickers_to_watch': [], 'generated_at': None
     }
+
+
+@router.post('/premarket-brief')
+async def trigger_premarket_brief():
+    """Manually trigger regeneration."""
+    asyncio.create_task(generate_premarket_brief())
+    return {'status': 'generating'}
 
 
 @router.get('/macro-narrative')
@@ -144,7 +204,7 @@ async def get_macro_narrative():
             return json.loads(raw)
         except Exception:
             return {'narrative': raw, 'regime': 'NEUTRAL', 'generated_at': None}
-    return {'narrative': 'Generating...', 'regime': 'NEUTRAL', 'generated_at': None}
+    return {'narrative': 'Generating on startup...', 'regime': 'NEUTRAL', 'generated_at': None}
 
 
 class ChatRequest(BaseModel):
@@ -164,12 +224,12 @@ Be concise and trader-focused.
 Question: {body.question}
 
 Headlines:
-{headlines}
+{headlines if headlines else 'No headlines available yet.'}
 
 If the headlines lack enough info, say so clearly."""
 
     try:
-        answer = await _gemini_call(prompt)
+        answer = await _ai_call(prompt)
         return {'answer': answer.strip(), 'sources_used': len(articles)}
     except Exception as e:
         logger.error(f'[ai] Chat error: {e}')
@@ -182,8 +242,8 @@ class BullBearRequest(BaseModel):
 
 @router.post('/bull-bear')
 async def ai_bull_bear(body: BullBearRequest):
-    ticker   = body.ticker.upper().strip()
-    articles = db.get_articles_for_ticker(ticker)
+    ticker    = body.ticker.upper().strip()
+    articles  = db.get_articles_for_ticker(ticker)
     headlines = '\n'.join(f"- {a['title']}" for a in articles[:30])
 
     prompt = f"""Based on today's news about {ticker}, generate bull and bear cases.
@@ -197,18 +257,11 @@ Return ONLY this JSON, no markdown:
 }}
 
 Headlines about {ticker}:
-{headlines}
-
-If no headlines found, base on general market knowledge."""
+{headlines if headlines else 'No specific headlines found — base on general knowledge.'}"""
 
     try:
-        raw = await _gemini_call(prompt)
-        text = raw.strip()
-        if text.startswith('```'):
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
-        return json.loads(text.strip())
+        raw  = await _ai_call(prompt)
+        return json.loads(_strip_json(raw))
     except json.JSONDecodeError:
         return {
             'ticker': ticker, 'bull_case': [], 'bear_case': [],

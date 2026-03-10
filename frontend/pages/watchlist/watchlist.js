@@ -47,7 +47,6 @@ async function _wlRender() {
       })
     })
 
-    // Fetch live quotes
     tickers.forEach(t => _wlFetchQuote(t))
 
     if (_wlSelected && tickers.includes(_wlSelected)) {
@@ -71,18 +70,23 @@ async function _wlFetchQuote(ticker) {
 async function _wlAdd() {
   const input = document.getElementById('wl-input')
   if (!input) return
-  const ticker = input.value.trim().toUpperCase()
+  // Sanitise: uppercase, strip non-alpha chars (handles BRK.B etc)
+  const raw    = input.value.trim().toUpperCase()
+  const ticker = raw.replace(/[^A-Z]/g, '')
   if (!ticker || !/^[A-Z]{1,5}$/.test(ticker)) {
-    _wlShowMsg('Invalid ticker symbol.', 'error'); return
+    _wlShowMsg('Invalid ticker — use 1-5 letters e.g. AAPL', 'error')
+    return
   }
   try {
     await apiWatchlistAdd(ticker)
     input.value = ''
     _wlShowMsg(`${ticker} added.`, 'success')
-    _wlInitDone = false  // allow re-render
+    _wlInitDone = false
     await _wlRender()
     _wlInitDone = true
-  } catch (e) { _wlShowMsg(`Error: ${e.message}`, 'error') }
+  } catch (e) {
+    _wlShowMsg(`Error: ${e.message}`, 'error')
+  }
 }
 
 async function _wlRemove(ticker) {
@@ -99,7 +103,6 @@ async function _wlRemove(ticker) {
 
 async function _wlSelectTicker(ticker) {
   _wlSelected = ticker
-  // Update selected state
   document.querySelectorAll('.wl-item').forEach(el => {
     el.classList.toggle('selected', el.dataset.ticker === ticker)
   })
@@ -118,13 +121,14 @@ async function _wlSelectTicker(ticker) {
 
   document.getElementById('wl-bullbear-btn')?.addEventListener('click', () => _wlLoadBullBear(ticker))
 
-  // Load quote
   try {
     const q = await apiPriceQuote(ticker)
     const priceEl = document.getElementById('wl-detail-price')
     if (priceEl) {
       if (q && q.price) {
         priceEl.innerHTML = `$${q.price.toFixed(2)} <span style="font-size:13px;color:var(--text-muted);">bid ${q.bid} / ask ${q.ask}</span>`
+      } else if (q && q.error) {
+        priceEl.innerHTML = `<span style="color:var(--text-muted);font-size:12px;">${q.error}</span>`
       } else {
         priceEl.textContent = 'Price unavailable'
       }
@@ -134,13 +138,12 @@ async function _wlSelectTicker(ticker) {
     if (priceEl) priceEl.textContent = 'Price unavailable'
   }
 
-  // Load news
   try {
     const articles = await apiFeedTicker(ticker)
     const newsWrap = document.getElementById('wl-news-wrap')
     if (!newsWrap) return
     if (!articles || articles.length === 0) {
-      newsWrap.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No recent news.</div>'
+      newsWrap.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No recent news for this ticker.</div>'
       return
     }
     newsWrap.innerHTML = articles.slice(0, 10).map(a => {
@@ -191,13 +194,10 @@ async function _wlLoadBullBear(ticker) {
 }
 
 function _wlShowMsg(msg, type = 'success') {
-  const list = document.getElementById('wl-list')
-  if (!list) return
-  const n = document.createElement('div')
-  n.className = `notification notification--${type}`
-  n.textContent = msg
-  list.prepend(n)
-  setTimeout(() => n.remove(), 3000)
+  const el = document.getElementById('wl-msg')
+  if (!el) return
+  el.innerHTML = `<div class="notification notification--${type}" style="margin:4px 0;">${msg}</div>`
+  setTimeout(() => { if (el) el.innerHTML = '' }, 3000)
 }
 
 function _wlRelTime(iso) {
