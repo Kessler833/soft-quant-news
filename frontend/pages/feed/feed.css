@@ -1,6 +1,21 @@
 #page-feed {
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+#feed-main {
+  display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+#feed-raw {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--bg-tertiary);
+  min-width: 180px;
 }
 
 .feed-select {
@@ -83,3 +98,81 @@
 .feed-card-chart-btn:hover {
   background: rgba(122,162,247,0.12);
 }
+
+/* ── Raw News Panel ── */
+.raw-row {
+  display: flex;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  cursor: default;
+  align-items: center;
+}
+.raw-row--high   { border-left-color: #ef5350; }
+.raw-row--medium { border-left-color: #ffa726; }
+.raw-row--low    { border-left-color: #7aa2f7; }
+.raw-row--ignore { border-left-color: #2a2a3e; opacity: 0.45; }
+.raw-row:hover   { background: var(--bg-tertiary); }
+
+.raw-time {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 36px;
+}
+.raw-source {
+  color: #7aa2f7;
+  flex-shrink: 0;
+  width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.raw-title {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+#feed-filter-info {
+  padding: 8px 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+#filter-kw-counts {
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+
+#filter-context {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.filter-update-btn {
+  background: none;
+  border: 1px solid #7aa2f7;
+  border-radius: 3px;
+  color: #7aa2f7;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 3px 8px;
+  cursor: pointer;
+  margin-top: 2px;
+  transition: background 0.15s;
+}
+.filter-update-btn:hover    { background: rgba(122,162,247,0.1); }
+.filter-update-btn:disabled { opacity: 0.4; cursor: not-allowed; }
