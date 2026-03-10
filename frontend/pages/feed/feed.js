@@ -6,6 +6,7 @@ let _feedSoundOn = true
 let _feedAudioCtx = null
 let _feedStatusEs = null
 let _feedRawEs = null
+let _feedKwInterval = null
 
 function _feedGetFilters() {
   return {
@@ -43,33 +44,31 @@ function _feedHideBanner() {
   if (el) el.style.display = 'none'
 }
 
-// ── Status Bar ──────────────────────────────────────────────────────────────
+// ── Status Bar (always visible) ──────────────────────────────────────────
 
 function _feedShowStatus(msg) {
-  const bar     = document.getElementById('feed-status-bar')
   const textEl  = document.getElementById('feed-status-text')
   const spinner = document.getElementById('feed-status-spinner')
   const badge   = document.getElementById('feed-status-badge')
-  if (!bar) return
+
   const [phase, ...rest] = msg.split(':')
   const detail = rest.join(':').trim()
+
+  if (phase === 'ping') return
+
   const phaseColors = {
     fetching: 'var(--accent-blue)',
     scoring:  'var(--accent-orange)',
     ai:       '#a9b1d6',
     done:     'var(--accent-green)',
     idle:     'var(--text-muted)',
-    ping:     null,
   }
-  if (phase === 'ping') return
   const color = phaseColors[phase] || 'var(--text-muted)'
-  bar.style.display = 'flex'
+
   if (textEl) { textEl.textContent = detail || msg; textEl.style.color = color }
   if (badge)  { badge.textContent = phase.toUpperCase(); badge.style.borderColor = color; badge.style.color = color }
+  // spinner: spin during active phases, hide when idle/done
   if (spinner) spinner.style.display = (phase === 'done' || phase === 'idle') ? 'none' : 'inline-block'
-  if (phase === 'done' || phase === 'idle') {
-    setTimeout(() => { if (bar) bar.style.display = 'none' }, 6000)
-  }
 }
 
 function _feedConnectStatusStream() {
@@ -78,7 +77,11 @@ function _feedConnectStatusStream() {
     _feedStatusEs = new EventSource('http://localhost:8000/api/feed/ingest-status')
     _feedStatusEs.onmessage = (e) => {
       _feedShowStatus(e.data)
-      if (e.data.startsWith('done:')) setTimeout(_feedLoadAndRender, 500)
+      if (e.data.startsWith('done:')) {
+        setTimeout(_feedLoadAndRender, 500)
+        // Refresh keyword status after ingest completes in case Groq just finished
+        setTimeout(_feedLoadKeywordStatus, 1500)
+      }
     }
     _feedStatusEs.onerror = () => {}
   } catch(e) { console.warn('[feed] Status SSE:', e) }
@@ -115,7 +118,12 @@ function _feedPrependRaw(article) {
   while (list.children.length > 300) list.removeChild(list.lastChild)
 }
 
-// ── Keyword Status ──────────────────────────────────────────────────────────
+// ── Keyword Status (with retry until data arrives) ──────────────────────
+
+function _feedSetKwLoading(on) {
+  const el = document.getElementById('filter-loading')
+  if (el) el.classList.toggle('visible', on)
+}
 
 async function _feedLoadKeywordStatus() {
   try {
@@ -124,18 +132,30 @@ async function _feedLoadKeywordStatus() {
     const nextEl    = document.getElementById('filter-next-update')
     const countEl   = document.getElementById('filter-kw-counts')
     const contextEl = document.getElementById('filter-context')
-    if (lastEl) lastEl.textContent = s.generated_at ? `Last update: ${_feedRelTime(s.generated_at)}` : 'Last update: never'
+
+    if (!s.generated_at) {
+      // Groq hasn't finished yet — show loading indicator, retry in 5s
+      _feedSetKwLoading(true)
+      if (lastEl)  lastEl.textContent  = 'Last update: generating...'
+      if (nextEl)  nextEl.textContent  = 'Next: —'
+      if (countEl) countEl.textContent = ''
+      setTimeout(_feedLoadKeywordStatus, 5000)
+      return
+    }
+
+    // Data is ready
+    _feedSetKwLoading(false)
+    if (lastEl) lastEl.textContent = `Last update: ${_feedRelTime(s.generated_at)}`
     if (nextEl) {
-      if (s.next_at) {
-        const diff = new Date(s.next_at) - Date.now()
-        nextEl.textContent = diff > 0 ? `Next: in ${Math.round(diff / 60000)}min` : 'Next: overdue'
-      } else {
-        nextEl.textContent = 'Next: pending'
-      }
+      const diff = new Date(s.next_at) - Date.now()
+      nextEl.textContent = diff > 0 ? `Next: in ${Math.round(diff / 60000)}min` : 'Next: overdue'
     }
     if (countEl)   countEl.textContent   = s.high_count ? `H:${s.high_count} M:${s.medium_count} L:${s.low_count} keywords` : ''
     if (contextEl) contextEl.textContent = s.context_note || ''
-  } catch(_) {}
+  } catch(e) {
+    // Backend not ready yet, retry
+    setTimeout(_feedLoadKeywordStatus, 5000)
+  }
 }
 
 // ── Sound ───────────────────────────────────────────────────────────────────
@@ -328,14 +348,24 @@ async function initFeed() {
   if (_feedInitDone) return
   _feedInitDone = true
 
+  // Split on the wrapper div, not the page itself
   try {
-    Split(['#feed-main', '#feed-raw'], { sizes: [80, 20], gutterSize: 5, minSize: [400, 180] })
+    Split(['#feed-main', '#feed-raw'], {
+      sizes: [80, 20],
+      gutterSize: 5,
+      minSize: [400, 180],
+      direction: 'horizontal',
+      cursor: 'col-resize',
+    })
   } catch(e) { console.warn('[feed] Split.js error:', e) }
 
   _feedConnectStatusStream()
   _feedConnectRawStream()
+
+  // Start keyword status polling — retries automatically until data arrives
   _feedLoadKeywordStatus()
-  setInterval(_feedLoadKeywordStatus, 60000)
+  // Then poll every 60s after it settles
+  _feedKwInterval = setInterval(_feedLoadKeywordStatus, 60000)
 
   await _feedLoadAndRender()
   _feedConnectWs()
@@ -363,11 +393,17 @@ async function initFeed() {
     updateBtn.addEventListener('click', async () => {
       updateBtn.disabled = true
       updateBtn.textContent = '\u21bb Updating...'
+      _feedSetKwLoading(true)
       try { await apiFeedRefreshKeywords() } catch(_) {}
-      setTimeout(async () => {
-        await _feedLoadKeywordStatus()
-        updateBtn.disabled = false
-        updateBtn.textContent = '\u21bb Update Filter Now'
+      // Poll every 3s until data comes back
+      const poll = setInterval(async () => {
+        const s = await apiFeedKeywordStatus().catch(() => null)
+        if (s && s.generated_at) {
+          clearInterval(poll)
+          await _feedLoadKeywordStatus()
+          updateBtn.disabled = false
+          updateBtn.textContent = '\u21bb Update Filter Now'
+        }
       }, 3000)
     })
   }
