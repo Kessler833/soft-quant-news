@@ -17,18 +17,24 @@ async function initSynchro() {
 
 function _synchroLoadFields() {
   const keys = QuantCache.loadApiKeys()
-  _set('key-alpaca-id',     keys.alpaca_key_id     || '')
-  _set('key-alpaca-secret', keys.alpaca_secret_key || '')
-  _set('key-gemini',        keys.gemini_api_key    || '')
-  _set('key-base-url',      keys.base_url          || '')
+  _set('key-alpaca-key',    keys.alpaca_key      || '')
+  _set('key-alpaca-secret', keys.alpaca_secret   || '')
+  _set('key-gemini',        keys.gemini_key      || '')
+  _set('key-finnhub',       keys.finnhub_key     || '')
+  _set('key-newsapi',       keys.newsapi_key     || '')
+  _set('key-marketaux',     keys.marketaux_token || '')
+  _set('key-base-url',      keys.base_url        || '')
 }
 
 async function _synchroSave() {
   const apiKeys = {
-    alpaca_key_id:     _get('key-alpaca-id'),
-    alpaca_secret_key: _get('key-alpaca-secret'),
-    gemini_api_key:    _get('key-gemini'),
-    base_url:          _get('key-base-url'),
+    alpaca_key:      _get('key-alpaca-key'),
+    alpaca_secret:   _get('key-alpaca-secret'),
+    gemini_key:      _get('key-gemini'),
+    finnhub_key:     _get('key-finnhub'),
+    newsapi_key:     _get('key-newsapi'),
+    marketaux_token: _get('key-marketaux'),
+    base_url:        _get('key-base-url'),
   }
   QuantCache.saveApi(apiKeys)
 
@@ -62,10 +68,11 @@ async function _synchroCheckAll() {
   if (!grid) return
 
   const checks = [
-    { name: 'Backend',    fn: () => fetch('http://localhost:8000/health').then(r => r.ok ? 'Online' : 'Error') },
+    { name: 'Backend',    fn: () => fetch('http://localhost:8000/api/health').then(r => r.ok ? 'Online' : 'Error') },
     { name: 'WebSocket',  fn: () => _wsCheck() },
-    { name: 'Alpaca',     fn: () => _keyCheck('alpaca_key_id') },
-    { name: 'Gemini',     fn: () => _keyCheck('gemini_api_key') },
+    { name: 'Alpaca',     fn: () => _keyCheck('alpaca_key') },
+    { name: 'Gemini',     fn: () => _keyCheck('gemini_key') },
+    { name: 'Finnhub',    fn: () => _keyCheck('finnhub_key') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
   ]
 
