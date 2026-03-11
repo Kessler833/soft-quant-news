@@ -25,6 +25,28 @@ const OLLAMA_BIN = path.join(OLLAMA_DIR, process.platform === 'win32' ? 'ollama.
 let _ollamaProcess = null
 let _weStartedIt   = false
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function _sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// Retry a file operation up to `retries` times with `delay` ms between attempts.
+// Handles EBUSY / EPERM that Windows throws when a file is still locked.
+async function _retryFileOp(fn, retries = 10, delay = 500) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return fn()
+    } catch (err) {
+      if ((err.code === 'EBUSY' || err.code === 'EPERM') && i < retries - 1) {
+        await _sleep(delay)
+      } else {
+        throw err
+      }
+    }
+  }
+}
+
 function _getLatestTag() {
   return new Promise((resolve, reject) => {
     const options = {
@@ -53,8 +75,8 @@ async function _getBinaryUrl() {
   const tag = await _getLatestTag()
   const base = `https://github.com/ollama/ollama/releases/download/${tag}`
   switch (process.platform) {
-    case 'win32':  return { url: `${base}/OllamaSetup.exe`,    isInstaller: true  }
-    case 'darwin': return { url: `${base}/Ollama-darwin.zip`, isInstaller: false }
+    case 'win32':  return { url: `${base}/OllamaSetup.exe`,     isInstaller: true  }
+    case 'darwin': return { url: `${base}/Ollama-darwin.zip`,  isInstaller: false }
     default:       return { url: `${base}/ollama-linux-amd64`, isInstaller: false }
   }
 }
@@ -84,7 +106,11 @@ function _streamToFile(reqUrl, destPath, onProgress, redirectCount = 0) {
       const total = parseInt(res.headers['content-length'] || '0', 10)
       let downloaded = 0
       const out = fs.createWriteStream(destPath)
-      res.on('data', chunk => { downloaded += chunk.length; out.write(chunk); if (total > 0) onProgress(downloaded, total) })
+      res.on('data', chunk => {
+        downloaded += chunk.length
+        out.write(chunk)
+        if (total > 0) onProgress(downloaded, total)
+      })
       res.on('end',   () => { out.end(); resolve() })
       res.on('error', err => { out.destroy(); reject(err) })
       out.on('error', reject)
@@ -96,11 +122,14 @@ function downloadBinary(onProgress, onStatus) {
   return new Promise(async (resolve, reject) => {
     try {
       if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true })
+
       onStatus('Fetching latest Ollama release info...')
       const { url, isInstaller } = await _getBinaryUrl()
       onStatus(`Downloading Ollama (${url.split('/').pop()})...`)
       const tmpPath = OLLAMA_BIN + '.tmp'
+
       await _streamToFile(url, tmpPath, onProgress)
+
       if (isInstaller) {
         onStatus('Running Ollama installer (silent)...')
         await new Promise((res2, rej2) => {
@@ -108,17 +137,28 @@ function downloadBinary(onProgress, onStatus) {
           proc.on('exit', code => { if (code === 0) res2(); else rej2(new Error(`Installer exited with code ${code}`)) })
           proc.on('error', rej2)
         })
-        fs.unlinkSync(tmpPath)
+
+        // Wait a moment for Windows to fully release the installer file lock
+        onStatus('Waiting for installer to release file locks...')
+        await _sleep(2000)
+
+        // Delete tmp installer — retry on EBUSY
+        await _retryFileOp(() => fs.unlinkSync(tmpPath))
+
+        // Copy ollama.exe from system install location — retry on EBUSY
         const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
         if (fs.existsSync(systemBin)) {
-          fs.copyFileSync(systemBin, OLLAMA_BIN)
+          onStatus('Copying Ollama binary...')
+          await _retryFileOp(() => fs.copyFileSync(systemBin, OLLAMA_BIN))
         } else {
+          // Installer added it to PATH — write a tiny .cmd shim
           fs.writeFileSync(OLLAMA_BIN.replace('.exe', '.cmd'), `@echo off\nollama %*\n`)
         }
       } else {
-        fs.renameSync(tmpPath, OLLAMA_BIN)
+        await _retryFileOp(() => fs.renameSync(tmpPath, OLLAMA_BIN))
         if (process.platform !== 'win32') fs.chmodSync(OLLAMA_BIN, 0o755)
       }
+
       onStatus('Ollama binary ready.')
       resolve()
     } catch (err) { reject(err) }
@@ -165,7 +205,9 @@ function pullModel(model, onProgress, onStatus) {
           try {
             const obj = JSON.parse(line)
             if (obj.status) onStatus(obj.status)
-            if (typeof obj.completed === 'number' && typeof obj.total === 'number' && obj.total > 0) onProgress(obj.completed, obj.total)
+            if (typeof obj.completed === 'number' && typeof obj.total === 'number' && obj.total > 0) {
+              onProgress(obj.completed, obj.total)
+            }
           } catch (_) {}
         }
       })
