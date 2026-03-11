@@ -32,6 +32,8 @@ async def lifespan(application: FastAPI):
         logger.info('[main] Running startup tasks...')
         try: await update_polymarket()
         except Exception as e: logger.warning(f'[main] Startup polymarket: {e}')
+        try: await ingest_all_sources()
+        except Exception as e: logger.warning(f'[main] Startup ingest: {e}')
 
     asyncio.create_task(_startup_tasks())
     yield
