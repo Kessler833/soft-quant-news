@@ -17,7 +17,7 @@ const os             = require('os')
 
 const OLLAMA_PORT    = 11434
 const OLLAMA_HOST    = `http://127.0.0.1:${OLLAMA_PORT}`
-const DEFAULT_MODEL  = 'gemma3:4b'
+const DEFAULT_MODEL  = 'phi4-mini'
 
 // Where we store a bundled binary if the user used our download path
 const OLLAMA_DIR  = path.join(app.getPath('userData'), 'ollama')
@@ -183,7 +183,7 @@ function startOllamaServer(onStatus) {
 
 function pullModel(model, onProgress, onStatus) {
   return new Promise((resolve, reject) => {
-    onStatus(`Pulling model ${model} — one-time ~2 GB download…`)
+    onStatus(`Pulling model ${model} — one-time ~2.5 GB download…`)
     const body = JSON.stringify({ name: model, stream: true })
     const req  = http.request({
       hostname: '127.0.0.1', port: OLLAMA_PORT,
