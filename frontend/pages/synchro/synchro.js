@@ -1,4 +1,4 @@
-// ── API rate caps (free tier, no Groq) ───────────────────────────────────────────
+// ── API rate caps (free tier, no Groq) ──────────────────────────────────────
 const API_CAPS = [
   { id: 'finnhub',   name: 'Finnhub',   rpm: 60,   rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
   { id: 'newsapi',   name: 'NewsAPI',   rpm: null,  rpd: 100,  color: 'var(--accent-purple)', note: 'newsapi.org' },
@@ -29,11 +29,17 @@ async function initSynchro() {
   await _synchroCheckAll()
   _synchroLoadStats()
 
-  // Wire Ollama background install IPC
+  // Wire Ollama IPC listeners for future events
   _registerOllamaIPC()
+
+  // Catch up with any Ollama events that fired before Synchro was opened
+  if (window.electronAPI?.getOllamaState) {
+    const state = await window.electronAPI.getOllamaState()
+    _applyOllamaState(state)
+  }
 }
 
-// ── Auto-push keys to backend on launch ─────────────────────────────────────────
+// ── Auto-push keys to backend on launch ───────────────────────────────────
 
 async function _synchroPushKeysToBackend() {
   const keys = QuantCache.loadApiKeys()
@@ -76,49 +82,105 @@ function _synchroLoadFields() {
   }
 }
 
-// ── Ollama inline install IPC ─────────────────────────────────────────────────
+// ── Ollama inline install IPC ─────────────────────────────────────────────
+
+function _getOllamaEls() {
+  return {
+    card:      document.getElementById('ollama-installer-card'),
+    bar:       document.getElementById('ollama-progress-bar'),
+    statusEl:  document.getElementById('ollama-status-text'),
+    stepLabel: document.getElementById('ollama-step-label'),
+    dots:      ['ollama-dot-1', 'ollama-dot-2', 'ollama-dot-3'].map(id => document.getElementById(id)),
+    conns:     ['ollama-conn-1', 'ollama-conn-2'].map(id => document.getElementById(id)),
+  }
+}
+
+function _ollamaShowCard() {
+  const { card } = _getOllamaEls()
+  if (card) card.style.display = 'block'
+}
+
+function _ollamaSetStep(step) {
+  const { dots, conns } = _getOllamaEls()
+  dots.forEach((d, i) => {
+    if (!d) return
+    d.className = 'step-dot' + (i + 1 < step ? ' done' : i + 1 === step ? ' active' : '')
+  })
+  conns.forEach((c, i) => {
+    if (!c) return
+    c.className = 'step-connector' + (i + 1 < step ? ' done' : '')
+  })
+}
+
+// Apply a cached state object (for catch-up on late Synchro open)
+function _applyOllamaState(state) {
+  if (!state || state.type === 'idle') return
+  const { bar, statusEl, stepLabel, card } = _getOllamaEls()
+
+  if (state.type === 'done') {
+    // Already finished — show briefly then hide
+    _ollamaShowCard()
+    _ollamaSetStep(4)
+    if (bar)       { bar.style.width = '100%'; bar.style.background = 'var(--accent-green)' }
+    if (stepLabel) stepLabel.textContent = 'Ready!'
+    if (statusEl)  statusEl.textContent  = 'Local AI is running — all systems go.'
+    setTimeout(() => { if (card) card.style.display = 'none' }, 2500)
+    return
+  }
+
+  if (state.type === 'error') {
+    _ollamaShowCard()
+    if (bar)       { bar.style.width = '100%'; bar.style.background = 'var(--accent-red)' }
+    if (stepLabel) stepLabel.textContent = 'Setup failed'
+    if (statusEl)  statusEl.textContent  = `Error: ${state.msg}`
+    return
+  }
+
+  if (state.type === 'step') {
+    _ollamaShowCard()
+    _ollamaSetStep(state.step)
+    if (stepLabel) stepLabel.textContent = state.label
+    if (bar)       { bar.style.width = '2%'; bar.style.background = 'var(--accent-blue)' }
+    return
+  }
+
+  if (state.type === 'progress') {
+    _ollamaShowCard()
+    if (bar) bar.style.width = (state.pct || 0) + '%'
+    return
+  }
+
+  if (state.type === 'status') {
+    if (statusEl) statusEl.textContent = state.msg
+    return
+  }
+}
 
 function _registerOllamaIPC() {
   if (!window.electronAPI) return
 
-  const card      = document.getElementById('ollama-installer-card')
-  const bar       = document.getElementById('ollama-progress-bar')
-  const statusEl  = document.getElementById('ollama-status-text')
-  const stepLabel = document.getElementById('ollama-step-label')
-  const dots      = ['ollama-dot-1', 'ollama-dot-2', 'ollama-dot-3'].map(id => document.getElementById(id))
-  const conns     = ['ollama-conn-1', 'ollama-conn-2'].map(id => document.getElementById(id))
-
-  function showCard() { if (card) card.style.display = 'block' }
-
-  function setStep(step) {
-    dots.forEach((d, i) => {
-      if (!d) return
-      d.className = 'step-dot' + (i + 1 < step ? ' done' : i + 1 === step ? ' active' : '')
-    })
-    conns.forEach((c, i) => {
-      if (!c) return
-      c.className = 'step-connector' + (i + 1 < step ? ' done' : '')
-    })
-  }
-
   window.electronAPI.onOllamaStep(({ step, total, label }) => {
-    showCard()
-    setStep(step)
+    _ollamaShowCard()
+    _ollamaSetStep(step)
+    const { bar, stepLabel } = _getOllamaEls()
     if (stepLabel) stepLabel.textContent = label
     if (bar) { bar.style.width = '2%'; bar.style.background = 'var(--accent-blue)' }
   })
 
   window.electronAPI.onOllamaProgress(({ pct }) => {
-    showCard()
+    _ollamaShowCard()
+    const { bar } = _getOllamaEls()
     if (bar) bar.style.width = pct + '%'
   })
 
   window.electronAPI.onOllamaStatus(({ msg }) => {
+    const { statusEl } = _getOllamaEls()
     if (statusEl) statusEl.textContent = msg
   })
 
   window.electronAPI.onOllamaDone(() => {
-    setStep(4)
+    const { bar, stepLabel, statusEl, card } = _getOllamaEls()
+    _ollamaSetStep(4)
     if (bar)       { bar.style.width = '100%'; bar.style.background = 'var(--accent-green)' }
     if (stepLabel) stepLabel.textContent = 'Ready!'
     if (statusEl)  statusEl.textContent  = 'Local AI is running — all systems go.'
@@ -126,7 +188,8 @@ function _registerOllamaIPC() {
   })
 
   window.electronAPI.onOllamaError(({ msg }) => {
-    showCard()
+    const { bar, stepLabel, statusEl } = _getOllamaEls()
+    _ollamaShowCard()
     if (bar)       { bar.style.width = '100%'; bar.style.background = 'var(--accent-red)' }
     if (stepLabel) stepLabel.textContent = 'Setup failed'
     if (statusEl)  statusEl.textContent  = `Error: ${msg} — check Ollama URL below and retry.`
@@ -135,7 +198,7 @@ function _registerOllamaIPC() {
   })
 }
 
-// ── Rate Limit Calculator ──────────────────────────────────────────────────
+// ── Rate Limit Calculator ─────────────────────────────────────────────────────
 
 function _calcApiStats(cap, activeMinutes) {
   const BUFFER = 0.85
@@ -169,8 +232,7 @@ function _rateCalcUpdate() {
     activeMinutes = until > from ? until - from : (1440 - from + until)
   }
   const windowLabel = alwaysOn ? '24h' : `${_get('rate-from') || '07:00'}\u2013${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
-  const firstCap = API_CAPS[0]
-  const firstStats = _calcApiStats(firstCap, activeMinutes)
+  const firstStats = _calcApiStats(API_CAPS[0], activeMinutes)
   container.dataset.intervalSec = firstStats.intervalSec
   container.innerHTML = API_CAPS.map(cap => {
     const s = _calcApiStats(cap, activeMinutes)
@@ -206,7 +268,7 @@ async function _rateApply() {
   }
 }
 
-// ── Save keys ───────────────────────────────────────────────────────────────
+// ── Save keys ──────────────────────────────────────────────────────────────
 
 async function _synchroSave() {
   const rate = QuantCache.loadRateSettings()
@@ -288,7 +350,7 @@ function _wsCheck() {
   })
 }
 
-// ── Feed stats ─────────────────────────────────────────────────────────────
+// ── Feed stats ───────────────────────────────────────────────────────────────
 
 async function _synchroLoadStats() {
   const el = document.getElementById('synchro-stats')
@@ -310,7 +372,7 @@ async function _synchroLoadStats() {
   }
 }
 
-// ── Misc ──────────────────────────────────────────────────────────────────────
+// ── Misc ─────────────────────────────────────────────────────────────────────
 
 async function _synchroSoftReset() {
   if (!confirm('Clear all articles, AI cache, and keywords? Watchlist and API keys will be preserved.')) return
