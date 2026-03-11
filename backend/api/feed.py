@@ -23,11 +23,9 @@ _last_ingest_at: Optional[datetime] = None
 INGEST_INTERVAL_SECONDS = 60
 
 # Only articles published within this window are considered "already seen"
-# for deduplication. Wider than the ingest interval to avoid gaps, but
-# short enough that we don't keep 7 days of IDs in RAM every cycle.
 _DEDUP_WINDOW_HOURS = 24
 
-# ── Hardcoded always-on HIGH keyword set ──────────────────────────────────────
+# ── Hardcoded always-on keyword sets ───────────────────────────────────────
 
 _BASE_HIGH = [
     'fed ', 'federal reserve', 'fomc', 'rate cut', 'rate hike', 'interest rate',
@@ -92,18 +90,16 @@ def _extract_tickers(text: str) -> list:
     return sorted(found)
 
 
-# ── Hybrid scorer: hardcoded keywords + AI keywords from DB ───────────────────
+# ── Hybrid scorer ───────────────────────────────────────────────────────────────
 
 def rule_score(article: dict) -> dict:
     text = (article.get('title', '') + ' ' + article.get('summary', '')).lower()
 
-    # Load AI-generated context keywords (may be None if Ollama hasn't run yet)
     ai_kw = db.get_latest_keywords()
     ai_high   = [kw.lower() for kw in (ai_kw['high_kw']   if ai_kw else [])]
     ai_medium = [kw.lower() for kw in (ai_kw['medium_kw'] if ai_kw else [])]
     ai_low    = [kw.lower() for kw in (ai_kw['low_kw']    if ai_kw else [])]
 
-    # Combine hardcoded + AI keywords; hardcoded always wins, AI adds on top
     effective_high   = _BASE_HIGH   + [kw for kw in ai_high   if kw not in _BASE_HIGH]
     effective_medium = _BASE_MEDIUM + [kw for kw in ai_medium if kw not in _BASE_MEDIUM]
     effective_low    = _BASE_LOW    + [kw for kw in ai_low    if kw not in _BASE_LOW]
@@ -113,8 +109,6 @@ def rule_score(article: dict) -> dict:
     low_hits    = sum(1 for kw in effective_low    if kw in text)
     bull_hits   = sum(1 for kw in _BULL_KW         if kw in text)
     bear_hits   = sum(1 for kw in _BEAR_KW         if kw in text)
-
-    # AI-only HIGH hit gets a small boost so AI-detected topics score correctly
     ai_high_hits = sum(1 for kw in ai_high if kw in text)
 
     if high_hits >= 2 or (high_hits >= 1 and ai_high_hits >= 1):
@@ -140,7 +134,6 @@ def rule_score(article: dict) -> dict:
             break
 
     tickers = _extract_tickers(article.get('title', '') + ' ' + article.get('summary', ''))
-
     return {
         'relevance':    relevance,
         'sentiment':    sentiment,
@@ -150,7 +143,7 @@ def rule_score(article: dict) -> dict:
     }
 
 
-# ── SSE helpers ───────────────────────────────────────────────────────────────
+# ── SSE helpers ────────────────────────────────────────────────────────────
 
 def _emit_status(msg: str):
     dead = []
@@ -180,7 +173,7 @@ def _emit_raw(article: dict):
         except: pass
 
 
-# ── SSE route handlers ────────────────────────────────────────────────────────
+# ── SSE routes ───────────────────────────────────────────────────────────────
 
 @router.get('/ingest-status')
 async def stream_ingest_status():
@@ -230,15 +223,14 @@ async def stream_raw_articles():
 
 @router.get('/cycle-status')
 async def get_cycle_status():
-    """Returns timing info for the ingest dashboard in the raw panel."""
     global _last_ingest_at
     now = datetime.now(timezone.utc)
     last_iso = _last_ingest_at.isoformat() if _last_ingest_at else None
     if _last_ingest_at:
-        elapsed  = (now - _last_ingest_at).total_seconds()
-        next_in  = max(0, INGEST_INTERVAL_SECONDS - elapsed)
+        elapsed = (now - _last_ingest_at).total_seconds()
+        next_in = max(0, INGEST_INTERVAL_SECONDS - elapsed)
     else:
-        next_in  = 0
+        next_in = 0
 
     ai_kw = db.get_latest_keywords()
     return {
@@ -255,16 +247,26 @@ async def get_cycle_status():
     }
 
 
+async def _run_force_cycle():
+    """Sequential: ingest first so articles are in DB, then refresh keywords against them."""
+    from backend.api.ai_routes import refresh_keywords
+    _emit_status('fetching: Force cycle — ingesting Finnhub…')
+    await ingest_all_sources()
+    _emit_status('scoring: Force cycle — refreshing AI keywords…')
+    await refresh_keywords()
+    _emit_status('done: Force cycle complete — keywords updated')
+
+
 @router.post('/force-ingest')
 async def force_ingest():
-    """Trigger an immediate ingest + keyword refresh cycle from the dashboard."""
-    from backend.api.ai_routes import refresh_keywords
-    asyncio.create_task(refresh_keywords())
-    asyncio.create_task(ingest_all_sources())
+    """Trigger an immediate sequential ingest → keyword refresh cycle.
+    Returns immediately; the work runs in the background.
+    The frontend polls /cycle-status to see the updated keyword timestamp."""
+    asyncio.create_task(_run_force_cycle())
     return {'status': 'triggered'}
 
 
-# ── Normalisation / ID ────────────────────────────────────────────────────────
+# ── Normalisation / ID ───────────────────────────────────────────────────────
 
 def _make_id(title):
     return hashlib.sha256(title.lower().strip().encode()).hexdigest()[:24]
@@ -280,7 +282,7 @@ def _normalize(title, source, url='', published_at=''):
     }
 
 
-# ── Finnhub fetchers ──────────────────────────────────────────────────────────
+# ── Finnhub fetchers ────────────────────────────────────────────────────────
 
 async def _fetch_finnhub_general(key):
     try:
@@ -292,12 +294,8 @@ async def _fetch_finnhub_general(key):
                 if not i.get('headline'):
                     continue
                 ts = i.get('datetime', 0)
-                # Skip articles with obviously broken/missing timestamps (epoch 0 or very old)
-                if ts and ts > 0:
-                    pub = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-                else:
-                    # No timestamp — treat as just-published so it isn't filtered
-                    pub = datetime.now(timezone.utc).isoformat()
+                pub = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts and ts > 0 \
+                      else datetime.now(timezone.utc).isoformat()
                 articles.append(_normalize(i['headline'], 'Finnhub', i.get('url', ''), pub))
             return articles
     except Exception as e:
@@ -321,10 +319,8 @@ async def _fetch_finnhub_company(key, ticker):
                 if not i.get('headline'):
                     continue
                 ts = i.get('datetime', 0)
-                if ts and ts > 0:
-                    pub = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-                else:
-                    pub = datetime.now(timezone.utc).isoformat()
+                pub = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts and ts > 0 \
+                      else datetime.now(timezone.utc).isoformat()
                 articles.append(_normalize(i['headline'], f'Finnhub/{ticker}', i.get('url', ''), pub))
             return articles
     except Exception as e:
@@ -332,7 +328,7 @@ async def _fetch_finnhub_company(key, ticker):
         return []
 
 
-# ── Price drift tracking ──────────────────────────────────────────────────────
+# ── Price drift tracking ────────────────────────────────────────────────────
 
 def _schedule_drift(article_id: str, ticker: str) -> None:
     try:
@@ -367,7 +363,7 @@ async def _track_drift(article_id: str, ticker: str, minutes: int) -> None:
         logger.warning(f'[feed] Drift track: {e}')
 
 
-# ── Main ingest ───────────────────────────────────────────────────────────────
+# ── Main ingest ─────────────────────────────────────────────────────────────
 
 async def ingest_all_sources() -> None:
     global _last_ingest_at
@@ -387,10 +383,6 @@ async def ingest_all_sources() -> None:
     results      = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
 
-    # ── Deduplication: only check IDs of articles published in the last 24h ──
-    # This prevents the entire article history from blocking new articles that
-    # happen to share an ID with an old entry (e.g. republished stories).
-    # It also avoids loading thousands of stale rows on every 60-second tick.
     recent_existing = db.get_articles_since(hours=_DEDUP_WINDOW_HOURS)
     existing_ids    = {a['id'] for a in recent_existing}
     new_articles    = [a for a in all_articles if a['id'] not in existing_ids]

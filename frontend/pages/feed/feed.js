@@ -47,7 +47,7 @@ function _feedHideBanner() {
   if (el) el.style.display = 'none'
 }
 
-// ── Status Bar ──────────────────────────────────────────────────────────────────────
+// ── Status Bar ────────────────────────────────────────────────────────────────────────
 
 function _feedShowStatus(msg) {
   const textEl  = document.getElementById('feed-status-text')
@@ -78,7 +78,7 @@ function _feedConnectStatusStream() {
       _feedShowStatus(e.data)
       if (e.data.startsWith('done:')) {
         setTimeout(_feedMergeLatest, 500)
-        setTimeout(_idashRefreshStatus, 800)   // refresh dashboard after ingest
+        setTimeout(_idashRefreshStatus, 800)
       }
     }
     _feedStatusEs.onerror = () => {
@@ -124,7 +124,7 @@ function _feedPrependRaw(article) {
   while (list.children.length > 300) list.removeChild(list.lastChild)
 }
 
-// ── Ingest Dashboard ─────────────────────────────────────────────────────────────
+// ── Ingest Dashboard ───────────────────────────────────────────────────────────────
 
 async function _idashRefreshStatus() {
   try {
@@ -132,11 +132,9 @@ async function _idashRefreshStatus() {
     if (!r.ok) return
     const d = await r.json()
 
-    // Countdown
     _idashNextIn = Math.max(0, d.next_in_seconds || 0)
     _idashUpdateCountdown()
 
-    // Keyword badge
     const badge = document.getElementById('idash-kw-badge')
     const age   = document.getElementById('idash-kw-age')
     const ctx   = document.getElementById('idash-context')
@@ -151,8 +149,11 @@ async function _idashRefreshStatus() {
       age.textContent = 'never'
     }
     if (ctx) ctx.textContent = d.context_note || ''
+
+    return d
   } catch (e) {
     console.warn('[idash] status fetch failed:', e)
+    return null
   }
 }
 
@@ -177,23 +178,49 @@ function _idashStartTick() {
       _idashUpdateCountdown()
     }
   }, 1000)
-  // Re-fetch actual server state every 30s to stay in sync
   setInterval(_idashRefreshStatus, 30000)
 }
 
 async function _idashForceRefresh() {
   const btn = document.getElementById('idash-force-btn')
-  if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing...' }
+  if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Ingesting...' }
+
   try {
     await fetch('http://localhost:8000/api/feed/force-ingest', { method: 'POST' })
-    setTimeout(_idashRefreshStatus, 2000)
   } catch (e) {
-    console.warn('[idash] force ingest failed:', e)
-  } finally {
-    if (btn) {
-      setTimeout(() => { btn.disabled = false; btn.textContent = '\u21bb Refresh Now' }, 3000)
-    }
+    console.warn('[idash] force ingest trigger failed:', e)
+    if (btn) { btn.disabled = false; btn.textContent = '\u21bb Refresh Now' }
+    return
   }
+
+  // The backend runs ingest then keywords sequentially (~10-20s on CPU).
+  // Poll /cycle-status every 2s until keyword_generated_at changes, then update UI.
+  const initialStatus = await _idashRefreshStatus()
+  const initialKwAt   = initialStatus?.keyword_generated_at || null
+
+  if (btn) btn.textContent = '\u23f3 Updating keywords...'
+
+  let polls = 0
+  const maxPolls = 20  // 40s max wait
+  const pollId = setInterval(async () => {
+    polls++
+    const status = await _idashRefreshStatus()
+    const newKwAt = status?.keyword_generated_at || null
+
+    // Keywords updated = timestamp changed or we hit max polls
+    if (newKwAt !== initialKwAt || polls >= maxPolls) {
+      clearInterval(pollId)
+      // If keywords panel is open, refresh it too
+      if (_idashKwVisible) {
+        _idashKwVisible = false  // force re-fetch
+        _idashToggleKeywords()
+      }
+      if (btn) {
+        btn.disabled  = false
+        btn.textContent = '\u21bb Refresh Now'
+      }
+    }
+  }, 2000)
 }
 
 async function _idashToggleKeywords() {
@@ -247,7 +274,7 @@ function _feedPlaySound(relevance) {
   } catch (_) {}
 }
 
-// ── Card builder ─────────────────────────────────────────────────────────────
+// ── Card builder ──────────────────────────────────────────────────────────────
 
 function _feedBuildCard(a, withChartBtn = true) {
   const rel     = (a.relevance || 'low').toLowerCase()
@@ -307,7 +334,7 @@ function _feedPrependCard(article) {
   while (list.children.length > 200) list.removeChild(list.lastChild)
 }
 
-// ── WebSocket ───────────────────────────────────────────────────────────────────────
+// ── WebSocket ──────────────────────────────────────────────────────────────────────
 
 function _feedConnectWs() {
   if (_feedRetryTimer) { clearTimeout(_feedRetryTimer); _feedRetryTimer = null }
@@ -333,7 +360,7 @@ function _feedConnectWs() {
   } catch (e) { console.warn('[feed] WS error:', e) }
 }
 
-// ── Load & render ─────────────────────────────────────────────────────────────────
+// ── Load & render ──────────────────────────────────────────────────────────────
 
 function _feedDebouncedLoad() {
   clearTimeout(_feedFilterTimer)
@@ -397,7 +424,7 @@ async function _feedMergeLatest() {
   }
 }
 
-// ── Chart modal ───────────────────────────────────────────────────────────────────
+// ── Chart modal ─────────────────────────────────────────────────────────────────
 
 async function _feedOpenChart(ticker) {
   const modal     = document.getElementById('feed-chart-modal')
@@ -448,7 +475,7 @@ async function _feedOpenChart(ticker) {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────────────────
 
 function _feedRelTime(iso) {
   if (!iso) return 'Unknown'
@@ -465,7 +492,7 @@ function _feedEsc(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-// ── Init ───────────────────────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────────────────
 
 async function initFeed() {
   if (_feedInitDone) return
@@ -513,7 +540,6 @@ async function initFeed() {
       document.getElementById('feed-chart-modal').classList.remove('open')
   })
 
-  // Ingest dashboard
   document.getElementById('idash-force-btn')?.addEventListener('click', _idashForceRefresh)
   document.getElementById('idash-kw-btn')?.addEventListener('click', _idashToggleKeywords)
   await _idashRefreshStatus()
