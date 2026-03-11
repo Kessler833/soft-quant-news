@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>soft-quant — Setup</title>
+  <style>
+    :root {
+      --bg:           #0d1117;
+      --bg-panel:     #161b22;
+      --border:       #21262d;
+      --accent-blue:  #58a6ff;
+      --accent-green: #3fb950;
+      --accent-red:   #f85149;
+      --accent-orange:#e3b341;
+      --text:         #e6edf3;
+      --text-muted:   #8b949e;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+
+    .logo {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent-blue);
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 28px;
+    }
+
+    /* Step indicators */
+    .steps {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      align-items: center;
+    }
+    .step-dot {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700;
+      color: var(--text-muted);
+      transition: all 0.3s;
+    }
+    .step-dot.active  { border-color: var(--accent-blue);  color: var(--accent-blue);  }
+    .step-dot.done    { border-color: var(--accent-green); color: var(--accent-green); background: rgba(63,185,80,.12); }
+    .step-connector {
+      width: 32px; height: 2px;
+      background: var(--border);
+      border-radius: 2px;
+      transition: background 0.3s;
+    }
+    .step-connector.done { background: var(--accent-green); }
+
+    /* Current step label */
+    .step-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 10px;
+      min-height: 18px;
+      text-align: center;
+    }
+
+    /* Progress bar */
+    .progress-wrap {
+      width: 100%;
+      max-width: 400px;
+      height: 6px;
+      background: var(--bg-panel);
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--accent-blue);
+      border-radius: 4px;
+      transition: width 0.2s ease, background 0.3s;
+      width: 0%;
+    }
+    .progress-bar.done  { background: var(--accent-green); }
+    .progress-bar.error { background: var(--accent-red); }
+    .progress-bar.indeterminate {
+      width: 40% !important;
+      animation: indeterminate 1.4s ease-in-out infinite;
+    }
+    @keyframes indeterminate {
+      0%   { margin-left: -40%; }
+      100% { margin-left: 140%; }
+    }
+
+    /* Status text */
+    .status-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      min-height: 16px;
+      text-align: center;
+      max-width: 400px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 20px;
+    }
+
+    /* Skip button */
+    .btn-skip {
+      font-size: 11px;
+      color: var(--text-muted);
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 14px;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .btn-skip:hover { color: var(--text); border-color: var(--text-muted); }
+
+    /* Done state */
+    .done-check {
+      display: none;
+      font-size: 32px;
+      color: var(--accent-green);
+      margin-bottom: 8px;
+    }
+    .done-check.visible { display: block; }
+
+    /* Error state */
+    .error-msg {
+      display: none;
+      font-size: 11px;
+      color: var(--accent-red);
+      text-align: center;
+      max-width: 400px;
+      margin-bottom: 8px;
+    }
+    .error-msg.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="logo">&#8857; soft-quant news</div>
+  <div class="subtitle">Setting up local AI engine &mdash; one-time setup</div>
+
+  <div class="steps">
+    <div class="step-dot" id="dot-1">1</div>
+    <div class="step-connector" id="conn-1"></div>
+    <div class="step-dot" id="dot-2">2</div>
+    <div class="step-connector" id="conn-2"></div>
+    <div class="step-dot" id="dot-3">3</div>
+  </div>
+
+  <div class="step-label" id="step-label">Initialising...</div>
+
+  <div class="progress-wrap">
+    <div class="progress-bar indeterminate" id="progress-bar"></div>
+  </div>
+
+  <div class="status-text" id="status-text">Starting up...</div>
+
+  <div class="done-check" id="done-check">&#10003;</div>
+  <div class="error-msg" id="error-msg"></div>
+
+  <button class="btn-skip" id="btn-skip">Skip &mdash; use Groq fallback instead</button>
+
+  <script>
+    const progressBar = document.getElementById('progress-bar')
+    const statusText  = document.getElementById('status-text')
+    const stepLabel   = document.getElementById('step-label')
+    const doneCheck   = document.getElementById('done-check')
+    const errorMsg    = document.getElementById('error-msg')
+    const btnSkip     = document.getElementById('btn-skip')
+
+    const dots  = [document.getElementById('dot-1'),  document.getElementById('dot-2'),  document.getElementById('dot-3')]
+    const conns = [document.getElementById('conn-1'), document.getElementById('conn-2')]
+
+    function setStep(step, total) {
+      dots.forEach((d, i) => {
+        d.className = 'step-dot' + (i + 1 < step ? ' done' : i + 1 === step ? ' active' : '')
+      })
+      conns.forEach((c, i) => {
+        c.className = 'step-connector' + (i + 1 < step ? ' done' : '')
+      })
+    }
+
+    function setProgress(pct) {
+      progressBar.classList.remove('indeterminate')
+      progressBar.style.width = pct + '%'
+    }
+
+    // IPC from main process
+    window.electronAPI.onSetupStep(({ step, total, label }) => {
+      setStep(step, total)
+      stepLabel.textContent = label
+      progressBar.classList.add('indeterminate')
+    })
+
+    window.electronAPI.onSetupProgress(({ pct }) => {
+      setProgress(pct)
+    })
+
+    window.electronAPI.onSetupStatus(({ msg }) => {
+      statusText.textContent = msg
+    })
+
+    window.electronAPI.onSetupDone(() => {
+      setStep(4, 3) // all done
+      progressBar.classList.remove('indeterminate')
+      progressBar.style.width = '100%'
+      progressBar.classList.add('done')
+      stepLabel.textContent = 'All done!'
+      statusText.textContent = 'Local AI is ready. Launching app...'
+      doneCheck.classList.add('visible')
+      btnSkip.style.display = 'none'
+    })
+
+    window.electronAPI.onSetupError(({ msg }) => {
+      progressBar.classList.remove('indeterminate')
+      progressBar.classList.add('error')
+      progressBar.style.width = '100%'
+      stepLabel.textContent = 'Setup failed'
+      errorMsg.textContent = `Error: ${msg}. Continuing with Groq fallback...`
+      errorMsg.classList.add('visible')
+      statusText.textContent = 'Closing in a moment...'
+    })
+
+    btnSkip.addEventListener('click', () => {
+      window.electronAPI.setupSkip()
+    })
+  </script>
+</body>
+</html>

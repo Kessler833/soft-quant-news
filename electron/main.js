@@ -1,32 +1,93 @@
-const { app, BrowserWindow } = require('electron')
+/**
+ * electron/main.js
+ * App entry point.
+ *
+ * Boot sequence:
+ *   1. Show setup window → ensureOllama() (download + pull if needed)
+ *   2. Start FastAPI backend
+ *   3. Wait for backend health check
+ *   4. Open main window
+ *
+ * Safe shutdown:
+ *   - window-all-closed  → kill FastAPI + Ollama (if we started it)
+ *   - before-quit        → same
+ *   - process SIGTERM    → same (e.g. task manager / OS kill)
+ *   - process SIGINT     → same (Ctrl+C in dev)
+ *   - uncaughtException  → same + log
+ */
+
+const { app, BrowserWindow, ipcMain } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
 
-let mainWindow = null
+const { runSetup }  = require('./setup-window')
+const { stopOllama } = require('./ollama-manager')
+
+let mainWindow    = null
 let fastApiProcess = null
+let _shuttingDown  = false
+
+// ── Safe shutdown ────────────────────────────────────────────────────────────
+
+function safeShutdown(reason) {
+  if (_shuttingDown) return
+  _shuttingDown = true
+  console.log(`[main] Safe shutdown triggered: ${reason}`)
+
+  // Stop Ollama server (only if we started it)
+  stopOllama()
+
+  // Kill FastAPI
+  if (fastApiProcess) {
+    try {
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', fastApiProcess.pid.toString(), '/f', '/t'], { stdio: 'ignore' })
+      } else {
+        fastApiProcess.kill('SIGTERM')
+      }
+    } catch (e) {
+      console.warn('[main] Could not kill FastAPI:', e.message)
+    }
+    fastApiProcess = null
+  }
+}
+
+// Register all possible exit scenarios
+app.on('before-quit',         () => safeShutdown('before-quit'))
+app.on('window-all-closed',   () => { safeShutdown('window-all-closed'); app.quit() })
+process.on('SIGTERM',         () => { safeShutdown('SIGTERM');  process.exit(0) })
+process.on('SIGINT',          () => { safeShutdown('SIGINT');   process.exit(0) })
+process.on('uncaughtException', (err) => {
+  console.error('[main] Uncaught exception:', err)
+  safeShutdown('uncaughtException')
+  process.exit(1)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] Unhandled rejection:', reason)
+  // Don't exit — unhandled promise rejections shouldn't crash the app
+})
+
+// ── IPC bridge for setup window ──────────────────────────────────────────────
+
+ipcMain.on('setup:skip-req', () => {
+  ipcMain.emit('setup:skip')
+})
+
+// ── Backend ──────────────────────────────────────────────────────────────────
 
 function waitForBackend(retries = 40, delay = 500) {
   return new Promise((resolve, reject) => {
     let attempts = 0
     function attempt() {
       http.get('http://127.0.0.1:8000/api/health', (res) => {
-        if (res.statusCode === 200) {
-          resolve()
-        } else {
-          retry()
-        }
-      }).on('error', () => {
-        retry()
-      })
+        if (res.statusCode === 200) resolve()
+        else retry()
+      }).on('error', retry)
     }
     function retry() {
-      attempts++
-      if (attempts >= retries) {
-        reject(new Error('Backend did not start in time'))
-      } else {
-        setTimeout(attempt, delay)
-      }
+      if (++attempts >= retries) reject(new Error('Backend did not start in time'))
+      else setTimeout(attempt, delay)
     }
     attempt()
   })
@@ -34,7 +95,7 @@ function waitForBackend(retries = 40, delay = 500) {
 
 function startBackend() {
   const projectRoot = path.join(__dirname, '..')
-  const pythonPath = path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
+  const pythonPath  = path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
 
   fastApiProcess = spawn(
     pythonPath,
@@ -42,60 +103,60 @@ function startBackend() {
     { cwd: projectRoot, stdio: 'pipe' }
   )
 
-  fastApiProcess.stdout.on('data', (data) => {
-    console.log('[FastAPI]', data.toString())
-  })
-  fastApiProcess.stderr.on('data', (data) => {
-    console.error('[FastAPI ERR]', data.toString())
-  })
-  fastApiProcess.on('exit', (code) => {
-    console.log('[FastAPI] exited with code', code)
+  fastApiProcess.stdout.on('data', d => console.log('[FastAPI]', d.toString().trim()))
+  fastApiProcess.stderr.on('data', d => console.error('[FastAPI ERR]', d.toString().trim()))
+  fastApiProcess.on('exit', code => {
+    console.log(`[FastAPI] Exited with code ${code}`)
+    fastApiProcess = null
   })
 }
 
-async function createWindow() {
+// ── Main window ───────────────────────────────────────────────────────────────
+
+async function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 900,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
-    }
+      nodeIntegration: false,
+    },
   })
 
   await mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'index.html'))
+
+  mainWindow.show()
 
   if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools()
   }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null
-  })
+  mainWindow.on('closed', () => { mainWindow = null })
 }
 
+// ── Boot sequence ─────────────────────────────────────────────────────────────
+
 app.whenReady().then(async () => {
+  // Step 1: Ensure Ollama is ready (shows setup window only if needed)
+  await runSetup()
+
+  // Step 2: Start Python backend
   startBackend()
+
+  // Step 3: Wait for backend, then open main window
   try {
     await waitForBackend(40, 500)
-    console.log('[Electron] Backend ready, opening window.')
-    await createWindow()
+    console.log('[main] Backend ready — opening main window.')
+    await createMainWindow()
   } catch (err) {
-    console.error('[Electron] Backend failed to start:', err.message)
+    console.error('[main] Backend failed to start:', err.message)
+    safeShutdown('backend-timeout')
     app.quit()
   }
 })
 
-app.on('window-all-closed', () => {
-  if (fastApiProcess) {
-    fastApiProcess.kill()
-  }
-  app.quit()
-})
-
 app.on('activate', async () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    await createWindow()
-  }
+  if (BrowserWindow.getAllWindows().length === 0) await createMainWindow()
 })
