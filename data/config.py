@@ -2,7 +2,7 @@
 
 KEYS = {
     'ollama_url':   'http://localhost:11434',
-    'ollama_model': 'qwen2.5:3b',
+    'ollama_model': 'gemma3:4b',
 }
 
 
