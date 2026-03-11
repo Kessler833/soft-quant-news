@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 KEYWORD_CACHE_TTL_MINUTES = 15
+KEYWORD_MIN_TOTAL = 40  # minimum combined keywords for a refresh to be considered valid
 
 
 def _strip_json(raw: str) -> str:
@@ -54,13 +55,15 @@ async def _ollama_generate(prompt: str, url: str, model: str) -> Optional[str]:
 
 async def refresh_keywords() -> dict:
     """Ask Ollama to analyse recent headlines and return context-aware keywords.
-    Saves result to keyword_cache table. Returns the keyword dict."""
+    Only saves to keyword_cache if total keyword count >= KEYWORD_MIN_TOTAL (40).
+    Falls back to the previous cache if the result is too sparse.
+    Returns the keyword dict (new or fallback)."""
     url   = config.get('ollama_url',   'http://localhost:11434').rstrip('/')
     model = config.get('ollama_model', 'phi4-mini')
 
     if not await _ensure_ollama_ready(url, model):
         logger.warning('[ai] refresh_keywords: Ollama not ready, skipping.')
-        return {}
+        return db.get_latest_keywords() or {}
 
     # Get recent headlines to give Ollama context about what is happening NOW
     recent = db.get_articles_since(hours=2)
@@ -73,16 +76,18 @@ Below are up to 40 recent market news headlines from the last 2 hours.
 Based on these headlines, identify the currently most market-moving topics and keywords.
 Return ONLY a compact JSON object — no explanation, no markdown:
 {{
-  "high_kw":    ["keyword1", "keyword2", ...],   // 5-12 words/phrases, HIGH relevance right now
-  "medium_kw":  ["keyword1", "keyword2", ...],   // 5-12 words/phrases, MEDIUM relevance
-  "low_kw":     ["keyword1", "keyword2", ...],   // 3-8 words/phrases, LOW relevance
+  "high_kw":    ["keyword1", "keyword2", ...],   // 15-20 words/phrases, HIGH relevance right now
+  "medium_kw":  ["keyword1", "keyword2", ...],   // 15-20 words/phrases, MEDIUM relevance
+  "low_kw":     ["keyword1", "keyword2", ...],   // 10-15 words/phrases, LOW relevance
   "context_note": "One-sentence summary of current market regime (e.g. risk-off, rate fears, earnings season)"
 }}
 
 Guidelines:
+- You MUST return at least 15 high_kw, 15 medium_kw, and 10 low_kw entries. This is required.
 - Focus on what is CURRENTLY driving price action today, not general evergreen terms.
 - Do NOT include generic words already obvious from any day (e.g. 'stock', 'market', 'company').
 - Prefer specific topics visible in the headlines: tickers, events, macro catalysts, geopolitical themes.
+- Fill remaining slots with the most relevant evergreen financial terms if headlines are sparse.
 - All keywords lowercase.
 
 Recent headlines:
@@ -93,7 +98,7 @@ JSON only:"""
     raw = await _ollama_generate(prompt, url, model)
     if not raw:
         logger.warning('[ai] refresh_keywords: no response from Ollama.')
-        return {}
+        return db.get_latest_keywords() or {}
 
     try:
         data = json.loads(_strip_json(raw))
@@ -101,12 +106,27 @@ JSON only:"""
         medium = [str(k).lower() for k in data.get('medium_kw', []) if k]
         low    = [str(k).lower() for k in data.get('low_kw',    []) if k]
         note   = str(data.get('context_note', ''))
+
+        total = len(high) + len(medium) + len(low)
+        if total < KEYWORD_MIN_TOTAL:
+            # Result is too sparse — keep the previous cache, do not overwrite
+            prev = db.get_latest_keywords()
+            logger.warning(
+                f'[ai] refresh_keywords: only {total} keywords returned '
+                f'({len(high)}H/{len(medium)}M/{len(low)}L) — '
+                f'threshold is {KEYWORD_MIN_TOTAL}. Keeping previous cache.'
+            )
+            return prev or {}
+
         db.save_keywords(high, medium, low, note)
-        logger.info(f'[ai] Keywords refreshed: {len(high)}H/{len(medium)}M/{len(low)}L | {note}')
+        logger.info(
+            f'[ai] Keywords refreshed: {len(high)}H/{len(medium)}M/{len(low)}L '
+            f'(total {total}) | {note}'
+        )
         return {'high_kw': high, 'medium_kw': medium, 'low_kw': low, 'context_note': note}
     except Exception as e:
         logger.warning(f'[ai] refresh_keywords JSON parse failed: {e} | raw={raw[:200]}')
-        return {}
+        return db.get_latest_keywords() or {}
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────

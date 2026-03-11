@@ -22,6 +22,11 @@ _raw_queues:    list = []
 _last_ingest_at: Optional[datetime] = None
 INGEST_INTERVAL_SECONDS = 60
 
+# Only articles published within this window are considered "already seen"
+# for deduplication. Wider than the ingest interval to avoid gaps, but
+# short enough that we don't keep 7 days of IDs in RAM every cycle.
+_DEDUP_WINDOW_HOURS = 24
+
 # ── Hardcoded always-on HIGH keyword set ──────────────────────────────────────
 
 _BASE_HIGH = [
@@ -282,13 +287,19 @@ async def _fetch_finnhub_general(key):
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f'https://finnhub.io/api/v1/news?category=general&token={key}')
             r.raise_for_status()
-            return [
-                _normalize(
-                    i.get('headline', ''), 'Finnhub', i.get('url', ''),
-                    datetime.fromtimestamp(i.get('datetime', 0), tz=timezone.utc).isoformat()
-                )
-                for i in r.json() if i.get('headline')
-            ]
+            articles = []
+            for i in r.json():
+                if not i.get('headline'):
+                    continue
+                ts = i.get('datetime', 0)
+                # Skip articles with obviously broken/missing timestamps (epoch 0 or very old)
+                if ts and ts > 0:
+                    pub = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                else:
+                    # No timestamp — treat as just-published so it isn't filtered
+                    pub = datetime.now(timezone.utc).isoformat()
+                articles.append(_normalize(i['headline'], 'Finnhub', i.get('url', ''), pub))
+            return articles
     except Exception as e:
         logger.warning(f'[feed] Finnhub general: {e}')
         return []
@@ -305,13 +316,17 @@ async def _fetch_finnhub_company(key, ticker):
                 f'?symbol={ticker}&from={yesterday}&to={today}&token={key}'
             )
             r.raise_for_status()
-            return [
-                _normalize(
-                    i.get('headline', ''), f'Finnhub/{ticker}', i.get('url', ''),
-                    datetime.fromtimestamp(i.get('datetime', 0), tz=timezone.utc).isoformat()
-                )
-                for i in r.json() if i.get('headline')
-            ]
+            articles = []
+            for i in r.json():
+                if not i.get('headline'):
+                    continue
+                ts = i.get('datetime', 0)
+                if ts and ts > 0:
+                    pub = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                else:
+                    pub = datetime.now(timezone.utc).isoformat()
+                articles.append(_normalize(i['headline'], f'Finnhub/{ticker}', i.get('url', ''), pub))
+            return articles
     except Exception as e:
         logger.warning(f'[feed] Finnhub {ticker}: {e}')
         return []
@@ -372,8 +387,13 @@ async def ingest_all_sources() -> None:
     results      = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
 
-    existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
-    new_articles = [a for a in all_articles if a['id'] not in existing_ids]
+    # ── Deduplication: only check IDs of articles published in the last 24h ──
+    # This prevents the entire article history from blocking new articles that
+    # happen to share an ID with an old entry (e.g. republished stories).
+    # It also avoids loading thousands of stale rows on every 60-second tick.
+    recent_existing = db.get_articles_since(hours=_DEDUP_WINDOW_HOURS)
+    existing_ids    = {a['id'] for a in recent_existing}
+    new_articles    = [a for a in all_articles if a['id'] not in existing_ids]
 
     _last_ingest_at = datetime.now(timezone.utc)
 
