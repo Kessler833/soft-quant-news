@@ -120,18 +120,29 @@
       margin-bottom: 20px;
     }
 
-    .btn-abort {
+    .btn {
       font-size: 11px;
-      color: var(--text-muted);
       background: none;
-      border: 1px solid var(--border);
       border-radius: 4px;
       padding: 4px 14px;
       cursor: pointer;
       -webkit-app-region: no-drag;
       transition: color 0.2s, border-color 0.2s;
     }
+    .btn-abort {
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
     .btn-abort:hover { color: var(--accent-red); border-color: var(--accent-red); }
+
+    .btn-done {
+      display: none;
+      color: var(--accent-green);
+      border: 1px solid var(--accent-green);
+      margin-bottom: 8px;
+    }
+    .btn-done:hover { background: rgba(63,185,80,.12); }
+    .btn-done.visible { display: inline-block; }
 
     .done-check {
       display: none;
@@ -175,7 +186,10 @@
   <div class="done-check" id="done-check">&#10003;</div>
   <div class="error-msg"  id="error-msg"></div>
 
-  <button class="btn-abort" id="btn-abort">&#10005; Abort &amp; Close</button>
+  <!-- Shown after installer opens, user confirms they finished it -->
+  <button class="btn btn-done" id="btn-done">&#10003; Done &mdash; I installed it</button>
+  <!-- Always visible abort -->
+  <button class="btn btn-abort" id="btn-abort">&#10005; Abort &amp; Close</button>
 
   <script>
     const progressBar = document.getElementById('progress-bar')
@@ -183,6 +197,7 @@
     const stepLabel   = document.getElementById('step-label')
     const doneCheck   = document.getElementById('done-check')
     const errorMsg    = document.getElementById('error-msg')
+    const btnDone     = document.getElementById('btn-done')
     const btnAbort    = document.getElementById('btn-abort')
 
     const dots  = [document.getElementById('dot-1'), document.getElementById('dot-2'), document.getElementById('dot-3')]
@@ -197,7 +212,7 @@
       })
     }
 
-    window.electronAPI.onSetupStep(({ step, total, label }) => {
+    window.electronAPI.onSetupStep(({ step, label }) => {
       setStep(step)
       stepLabel.textContent = label
       progressBar.classList.add('indeterminate')
@@ -212,6 +227,13 @@
       statusText.textContent = msg
     })
 
+    // Installer has been opened — show the "Done" confirm button
+    window.electronAPI.onSetupWaitForUser(() => {
+      progressBar.classList.remove('indeterminate')
+      progressBar.style.width = '100%'
+      btnDone.classList.add('visible')
+    })
+
     window.electronAPI.onSetupDone(() => {
       setStep(4)
       progressBar.classList.remove('indeterminate')
@@ -220,6 +242,7 @@
       stepLabel.textContent = 'All done!'
       statusText.textContent = 'Local AI is ready. Launching app...'
       doneCheck.classList.add('visible')
+      btnDone.style.display = 'none'
       btnAbort.style.display = 'none'
     })
 
@@ -231,6 +254,14 @@
       errorMsg.textContent = `Error: ${msg}`
       errorMsg.classList.add('visible')
       statusText.textContent = 'Closing in a moment...'
+      btnDone.style.display = 'none'
+    })
+
+    btnDone.addEventListener('click', () => {
+      window.electronAPI.setupInstallerDone()
+      btnDone.style.display = 'none'
+      progressBar.classList.add('indeterminate')
+      statusText.textContent = 'Waiting for Ollama to start...'
     })
 
     btnAbort.addEventListener('click', () => {

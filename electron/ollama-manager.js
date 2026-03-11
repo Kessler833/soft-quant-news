@@ -1,14 +1,15 @@
 /**
  * ollama-manager.js
  * Manages the full Ollama lifecycle:
- *   - Detect if already running (user has their own Ollama)
- *   - Download the Ollama binary if missing
+ *   - Detect if already running
+ *   - Download OllamaSetup.exe and open it for the user to run
+ *   - Wait for user to confirm install is done
  *   - Pull the default model if missing
  *   - Start the Ollama server
  *   - Track the process for safe shutdown
  */
 
-const { app } = require('electron')
+const { app, shell } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const fs = require('fs')
@@ -30,20 +31,6 @@ let _weStartedIt   = false
 
 function _sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-async function _retryFileOp(fn, retries = 10, delay = 500) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return fn()
-    } catch (err) {
-      if ((err.code === 'EBUSY' || err.code === 'EPERM') && i < retries - 1) {
-        await _sleep(delay)
-      } else {
-        throw err
-      }
-    }
-  }
 }
 
 function _tryDelete(filePath) {
@@ -93,7 +80,9 @@ function isOllamaRunning() {
 }
 
 function isBinaryInstalled() {
-  return fs.existsSync(OLLAMA_BIN)
+  // Check our managed copy OR the standard system install location
+  const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
+  return fs.existsSync(OLLAMA_BIN) || fs.existsSync(systemBin)
 }
 
 function _streamToFile(reqUrl, destPath, onProgress, redirectCount = 0) {
@@ -121,71 +110,43 @@ function _streamToFile(reqUrl, destPath, onProgress, redirectCount = 0) {
   })
 }
 
-function downloadBinary(onProgress, onStatus) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true })
+/**
+ * Download OllamaSetup.exe and open it via shell.openPath (no spawn).
+ * The setup window will show a "Done — I installed it" button.
+ * We wait for the user to confirm, then check if ollama is running.
+ */
+async function downloadAndOpenInstaller(onProgress, onStatus, onWaitForUser) {
+  if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true })
 
-      // Use system TEMP so Windows Defender doesn't block execution from AppData
-      const installerPath = path.join(os.tmpdir(), 'OllamaSetup.exe')
+  const installerPath = path.join(os.tmpdir(), 'OllamaSetup.exe')
+  _tryDelete(installerPath)
+  await _sleep(300)
 
-      // Clean up any stale installer from a previous interrupted run
-      if (fs.existsSync(installerPath)) {
-        onStatus('Cleaning up previous incomplete download...')
-        _tryDelete(installerPath)
-        await _sleep(500)
-      }
+  onStatus('Fetching latest Ollama release info...')
+  const { url } = await _getBinaryUrl()
+  onStatus(`Downloading Ollama installer...`)
 
-      onStatus('Fetching latest Ollama release info...')
-      const { url, isInstaller } = await _getBinaryUrl()
-      onStatus(`Downloading Ollama (${url.split('/').pop()})...`)
+  await _streamToFile(url, installerPath, onProgress)
 
-      if (isInstaller) {
-        // Download directly into TEMP
-        await _streamToFile(url, installerPath, onProgress)
+  onStatus('Opening installer — please complete the setup, then click “Done” below.')
+  await shell.openPath(installerPath)
 
-        onStatus('Running Ollama installer (silent)...')
-        await new Promise((res2, rej2) => {
-          const proc = spawn(installerPath, ['/VERYSILENT', '/NORESTART'], {
-            stdio: 'ignore',
-            detached: false,
-          })
-          proc.on('exit', code => { if (code === 0) res2(); else rej2(new Error(`Installer exited with code ${code}`)) })
-          proc.on('error', rej2)
-        })
+  // Hand control to the setup window — it will show a "Done" button
+  // and call window.electronAPI.setupInstallerDone() when clicked
+  await onWaitForUser()
 
-        onStatus('Waiting for installer to release file locks...')
-        await _sleep(2000)
-
-        _tryDelete(installerPath)
-
-        // Copy the installed binary to our managed location
-        const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
-        if (fs.existsSync(systemBin)) {
-          onStatus('Copying Ollama binary...')
-          await _retryFileOp(() => fs.copyFileSync(systemBin, OLLAMA_BIN))
-        } else {
-          // Fallback: ollama is in PATH after install
-          fs.writeFileSync(OLLAMA_BIN.replace('.exe', '.cmd'), `@echo off\nollama %*\n`)
-        }
-      } else {
-        const tmpPath = OLLAMA_BIN + '.tmp'
-        _tryDelete(tmpPath)
-        await _streamToFile(url, tmpPath, onProgress)
-        await _retryFileOp(() => fs.renameSync(tmpPath, OLLAMA_BIN))
-        if (process.platform !== 'win32') fs.chmodSync(OLLAMA_BIN, 0o755)
-      }
-
-      onStatus('Ollama binary ready.')
-      resolve()
-    } catch (err) { reject(err) }
-  })
+  _tryDelete(installerPath)
 }
 
 function startOllamaServer(onStatus) {
   return new Promise((resolve, reject) => {
     onStatus('Starting Ollama server...')
-    const bin = fs.existsSync(OLLAMA_BIN) ? OLLAMA_BIN : 'ollama'
+    // Prefer system install, fall back to our managed copy
+    const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
+    const bin = fs.existsSync(systemBin) ? systemBin
+              : fs.existsSync(OLLAMA_BIN) ? OLLAMA_BIN
+              : 'ollama'
+
     _ollamaProcess = spawn(bin, ['serve'], {
       env: { ...process.env, OLLAMA_HOST: `127.0.0.1:${OLLAMA_PORT}` },
       stdio: 'pipe',
@@ -248,7 +209,7 @@ async function isModelPulled(model) {
   } catch (_) { return false }
 }
 
-async function ensureOllama({ onStep, onProgress, onStatus, onDone, onError }) {
+async function ensureOllama({ onStep, onProgress, onStatus, onWaitForUser, onDone, onError }) {
   try {
     onStep(1, 3, 'Checking for Ollama...')
     if (await isOllamaRunning()) {
@@ -259,20 +220,29 @@ async function ensureOllama({ onStep, onProgress, onStatus, onDone, onError }) {
       }
       onStep(3, 3, 'Ready!'); onDone(); return
     }
+
     if (!isBinaryInstalled()) {
       onStep(1, 3, 'Downloading Ollama...')
-      await downloadBinary(onProgress, onStatus)
+      await downloadAndOpenInstaller(onProgress, onStatus, onWaitForUser)
     } else {
       onStatus('Ollama binary found.')
     }
-    onStep(2, 3, 'Starting Ollama server...')
-    await startOllamaServer(onStatus)
+
+    // After install, Ollama may already be running (installer auto-starts it)
+    if (!await isOllamaRunning()) {
+      onStep(2, 3, 'Starting Ollama server...')
+      await startOllamaServer(onStatus)
+    } else {
+      onStatus('Ollama is already running after install.')
+    }
+
     if (!await isModelPulled(DEFAULT_MODEL)) {
       onStep(3, 3, `Pulling model ${DEFAULT_MODEL}...`)
       await pullModel(DEFAULT_MODEL, onProgress, onStatus)
     } else {
       onStatus(`Model ${DEFAULT_MODEL} already present.`)
     }
+
     onStep(3, 3, 'Ready!'); onDone()
   } catch (err) {
     console.error('[ollama-manager] Error:', err)
