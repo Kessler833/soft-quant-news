@@ -33,14 +33,6 @@
         <label class="synchro-label">Finnhub Key <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 60 req/min)</span></label>
         <input id="key-finnhub" class="synchro-input" type="password" placeholder=""/>
       </div>
-      <div class="synchro-field-group">
-        <label class="synchro-label">NewsAPI Key <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 100 req/day)</span></label>
-        <input id="key-newsapi" class="synchro-input" type="password" placeholder=""/>
-      </div>
-      <div class="synchro-field-group">
-        <label class="synchro-label">Marketaux Token <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 100 req/day)</span></label>
-        <input id="key-marketaux" class="synchro-input" type="password" placeholder=""/>
-      </div>
       <div style="display:flex;gap:10px;margin-top:14px;">
         <button id="synchro-save-btn" class="synchro-btn synchro-btn--primary">&#10003; Save &amp; Apply</button>
         <button id="synchro-clear-btn" class="synchro-btn">&#10005; Clear All Keys</button>
@@ -54,8 +46,6 @@
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
         Calculates the optimal ingest interval for each API so your daily quota lasts the full active window &mdash; with a <strong style="color:var(--text-primary);">15% buffer</strong>.
       </div>
-
-      <!-- Window controls -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
         <div class="synchro-field-group" style="margin-bottom:0;">
           <label class="synchro-label">Window &mdash; From</label>
@@ -70,10 +60,7 @@
           <label for="rate-always-on" style="font-size:12px;color:var(--text-primary);cursor:pointer;">Always on (24h)</label>
         </div>
       </div>
-
-      <!-- Per-API stat cards -->
       <div id="rate-all-results" style="display:flex;flex-direction:column;gap:10px;"></div>
-
       <button id="rate-apply-btn" class="synchro-btn synchro-btn--primary" style="margin-top:12px;">&#10003; Apply Schedule</button>
     </div>
 

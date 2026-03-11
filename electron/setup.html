@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: #0a0a14;
+    color: #cdd6f4;
+    font-family: 'JetBrains Mono','Cascadia Code','Consolas',monospace;
+    width: 100vw; height: 100vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    overflow: hidden;
+    user-select: none;
+    -webkit-app-region: drag;
+  }
+  .card {
+    width: 420px;
+    background: #13131f;
+    border: 1px solid #2a2a3e;
+    border-radius: 12px;
+    padding: 32px 28px;
+    display: flex; flex-direction: column; gap: 20px;
+    -webkit-app-region: no-drag;
+  }
+  .logo { font-size: 32px; text-align: center; filter: drop-shadow(0 0 12px rgba(137,180,250,0.5)); }
+  .title {
+    text-align: center;
+    font-size: 15px; font-weight: 700;
+    color: #89b4fa;
+    letter-spacing: 0.08em;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 11px; color: #585b70;
+    line-height: 1.7;
+  }
+  .divider { border: none; border-top: 1px solid #2a2a3e; }
+  .section-label {
+    font-size: 10px; color: #6c7086;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin-bottom: 6px;
+  }
+  .status-row {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 8px 12px;
+    background: #0d0d1a;
+    border: 1px solid #1e1e2e;
+    border-radius: 6px;
+  }
+  .status-label { color: #a6adc8; }
+  .badge {
+    font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 4px;
+    letter-spacing: 0.05em;
+  }
+  .badge--ok      { background: #1e3a2a; color: #a6e3a1; border: 1px solid #2d5c3f; }
+  .badge--missing { background: #3a1e1e; color: #f38ba8; border: 1px solid #5c2d2d; }
+  .badge--checking { background: #1e1e2e; color: #6c7086; border: 1px solid #2a2a3e; }
+  .btn {
+    width: 100%;
+    padding: 10px 0;
+    border: none; border-radius: 6px;
+    font-family: inherit; font-size: 12px; font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn--primary  { background: #89b4fa; color: #0a0a14; }
+  .btn--download { background: #cba6f7; color: #0a0a14; }
+  .btn--skip     { background: transparent; color: #585b70; border: 1px solid #2a2a3e; }
+  .btn:not(:disabled):hover { opacity: 0.85; }
+  .msg {
+    font-size: 11px; color: #6c7086;
+    text-align: center; min-height: 16px;
+    line-height: 1.6;
+  }
+  .msg--ok    { color: #a6e3a1; }
+  .msg--error { color: #f38ba8; }
+  .spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid #2a2a3e;
+    border-top-color: #89b4fa;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">&#9685;</div>
+  <div>
+    <div class="title">SOFT QUANT &mdash; First Run Setup</div>
+    <div class="subtitle" style="margin-top:6px;">Checking required dependencies before launch.</div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div>
+    <div class="section-label">Dependencies</div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div class="status-row">
+        <span class="status-label">Ollama (local AI runtime)</span>
+        <span class="badge badge--checking" id="ollama-badge"><span class="spinner"></span>Checking</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="ollama-actions" style="display:none;flex-direction:column;gap:8px;">
+    <div class="msg" id="ollama-msg"></div>
+    <button class="btn btn--download" id="btn-download" onclick="downloadOllama()">&#8659; Download Ollama Installer</button>
+    <button class="btn btn--skip"     id="btn-skip"     onclick="skip()">Skip for now (AI features disabled)</button>
+  </div>
+
+  <div id="ready-actions" style="display:none;flex-direction:column;gap:8px;">
+    <div class="msg msg--ok" id="ready-msg">&#10003; All dependencies satisfied.</div>
+    <button class="btn btn--primary" id="btn-launch" onclick="launch()">&#9654; Launch Soft Quant</button>
+  </div>
+
+  <div id="checking-msg" class="msg"><span class="spinner"></span>Checking dependencies...</div>
+</div>
+
+<script>
+  const { setupAPI } = window
+
+  async function check() {
+    const badge   = document.getElementById('ollama-badge')
+    const actions = document.getElementById('ollama-actions')
+    const ready   = document.getElementById('ready-actions')
+    const checking = document.getElementById('checking-msg')
+    const msg     = document.getElementById('ollama-msg')
+
+    try {
+      const installed = await setupAPI.checkOllama()
+      checking.style.display = 'none'
+
+      if (installed) {
+        badge.className = 'badge badge--ok'
+        badge.textContent = '\u2713 Installed'
+        ready.style.display = 'flex'
+      } else {
+        badge.className = 'badge badge--missing'
+        badge.textContent = 'Missing'
+        msg.textContent = 'Ollama is not installed. Download and run the installer, then click Re-check.'
+        actions.style.display = 'flex'
+        // Add re-check button dynamically
+        const recheck = document.createElement('button')
+        recheck.className = 'btn btn--skip'
+        recheck.textContent = '\u21bb Re-check'
+        recheck.onclick = () => { actions.style.display='none'; checking.style.display='block'; setTimeout(check, 300) }
+        actions.appendChild(recheck)
+      }
+    } catch(e) {
+      checking.style.display = 'none'
+      badge.className = 'badge badge--missing'
+      badge.textContent = 'Error'
+      msg.className = 'msg msg--error'
+      msg.textContent = 'Could not check Ollama: ' + e.message
+      actions.style.display = 'flex'
+    }
+  }
+
+  function downloadOllama() {
+    setupAPI.openExternal('https://ollama.com/download/windows')
+    document.getElementById('ollama-msg').textContent = 'Installer opened in browser. Run it, then click Re-check below.'
+  }
+
+  function launch() {
+    setupAPI.proceed()
+  }
+
+  function skip() {
+    setupAPI.proceed()
+  }
+
+  check()
+</script>
+</body>
+</html>

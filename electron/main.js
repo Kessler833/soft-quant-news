@@ -1,11 +1,55 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
-const { spawn } = require('child_process')
+const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { spawn, execFile } = require('child_process')
 const path = require('path')
 const http = require('http')
+const fs   = require('fs')
 
 let mainWindow   = null
 let splashWindow = null
+let setupWindow  = null
 let fastApiProcess = null
+
+// ── IPC: Setup window handlers ────────────────────────────────────────────
+
+ipcMain.handle('setup-check-ollama', () => {
+  return new Promise((resolve) => {
+    execFile('ollama', ['--version'], { timeout: 4000 }, (err) => {
+      resolve(!err)
+    })
+  })
+})
+
+ipcMain.handle('setup-open-external', (_e, url) => {
+  shell.openExternal(url)
+})
+
+ipcMain.on('setup-proceed', () => {
+  if (setupWindow && !setupWindow.isDestroyed()) {
+    setupWindow.close()
+    setupWindow = null
+  }
+  bootSplashAndBackend()
+})
+
+// ── Setup window ──────────────────────────────────────────────────────────────
+
+function createSetupWindow() {
+  setupWindow = new BrowserWindow({
+    width:  460,
+    height: 460,
+    frame:       false,
+    transparent: false,
+    resizable:   false,
+    center:      true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'setup-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    }
+  })
+  setupWindow.loadFile(path.join(__dirname, 'setup.html'))
+}
 
 // ── Splash ────────────────────────────────────────────────────────────────────
 
@@ -80,7 +124,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width:  1600,
     height: 900,
-    show: false,   // don't show until ready
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -95,23 +139,19 @@ async function createWindow() {
   }
 
   mainWindow.on('closed', () => { mainWindow = null })
-
-  // Fade in main window then close splash
   mainWindow.show()
   setTimeout(closeSplash, 300)
 }
 
-// ── Boot sequence ─────────────────────────────────────────────────────────────
+// ── Boot sequence (runs after setup window closes) ───────────────────────
 
-app.whenReady().then(async () => {
+async function bootSplashAndBackend() {
   createSplash()
 
   splashProgress(10, 'Starting Python backend<span class="dots"></span>')
   startBackend()
-
   splashProgress(20, 'Waiting for server<span class="dots"></span>')
 
-  // Animate progress while waiting (20 → 80 over ~15s)
   let fakePct = 20
   const fakeTimer = setInterval(() => {
     fakePct = Math.min(fakePct + 3, 80)
@@ -121,17 +161,23 @@ app.whenReady().then(async () => {
   try {
     await waitForBackend(40, 500)
     clearInterval(fakeTimer)
-
     splashProgress(90, 'Loading interface<span class="dots"></span>')
     await createWindow()
     splashProgress(100, 'Ready &#10003;', 'ready')
-
   } catch (err) {
     clearInterval(fakeTimer)
     splashProgress(100, 'Backend failed to start &#9888;', 'error')
     console.error('[Electron] Backend failed:', err.message)
     setTimeout(() => app.quit(), 3000)
   }
+}
+
+// ── App entry ───────────────────────────────────────────────────────────────────
+
+app.whenReady().then(() => {
+  // Always show setup check on first open
+  // Once user clicks Launch or Skip, setup-proceed fires bootSplashAndBackend
+  createSetupWindow()
 })
 
 app.on('window-all-closed', () => {

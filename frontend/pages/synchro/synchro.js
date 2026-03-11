@@ -1,10 +1,8 @@
-// ── API rate caps (free tier) ─────────────────────────────────────────────────
+// ── API rate caps (active sources only) ──────────────────────────────────────
 const API_CAPS = [
-  { id: 'groq',      name: 'Groq AI',   rpm: 30,   rpd: 1000, color: 'var(--accent-blue)',   note: 'console.groq.com' },
-  { id: 'finnhub',   name: 'Finnhub',   rpm: 60,   rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
-  { id: 'newsapi',   name: 'NewsAPI',   rpm: null,  rpd: 100,  color: 'var(--accent-purple)', note: 'newsapi.org' },
-  { id: 'marketaux', name: 'Marketaux', rpm: null,  rpd: 100,  color: 'var(--accent-green)',  note: 'marketaux.com' },
-  { id: 'alpaca',    name: 'Alpaca',    rpm: 200,  rpd: null, color: 'var(--text-primary)',   note: 'Data stream (unlimited news)' },
+  { id: 'groq',    name: 'Groq AI',  rpm: 30,  rpd: 1000, color: 'var(--accent-blue)',   note: 'console.groq.com' },
+  { id: 'finnhub', name: 'Finnhub',  rpm: 60,  rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
+  { id: 'alpaca',  name: 'Alpaca',   rpm: 200, rpd: null, color: 'var(--text-primary)',   note: 'Data stream' },
 ]
 
 let _synchroInitDone = false
@@ -25,19 +23,14 @@ async function initSynchro() {
   document.getElementById('rate-until')?.addEventListener('input',              _rateCalcUpdate)
   document.getElementById('rate-always-on')?.addEventListener('change',         _rateCalcUpdate)
 
-  // Auto-push saved keys to backend on every launch so config is never empty
   await _synchroPushKeysToBackend()
-
   await _synchroCheckAll()
   _synchroLoadStats()
 }
 
-// Push whatever is in QuantCache to the backend immediately.
-// This ensures keys are available even if the user never clicks Save.
 async function _synchroPushKeysToBackend() {
   const keys = QuantCache.loadApiKeys()
   const rate = QuantCache.loadRateSettings()
-  // Only push if at least one key is saved
   const hasAnyKey = Object.values(keys).some(v => v && String(v).trim().length > 0)
   if (!hasAnyKey) return
   try {
@@ -48,16 +41,10 @@ async function _synchroPushKeysToBackend() {
     })
     console.log('[synchro] Keys auto-pushed to backend on launch.')
   } catch (e) {
-    console.warn('[synchro] Auto-push failed (backend may still be starting):', e.message)
-    // Retry once after 3s in case backend was still booting
+    console.warn('[synchro] Auto-push failed:', e.message)
     setTimeout(async () => {
       try {
-        await apiHealth({
-          ...keys,
-          groq_rpm:            rate.groqRpm     || 25,
-          ingest_interval_sec: rate.intervalSec || 90,
-        })
-        console.log('[synchro] Keys auto-pushed to backend (retry ok).')
+        await apiHealth({ ...QuantCache.loadApiKeys(), groq_rpm: 25, ingest_interval_sec: 90 })
       } catch (_) {}
     }, 3000)
   }
@@ -66,15 +53,13 @@ async function _synchroPushKeysToBackend() {
 function _synchroLoadFields() {
   const keys = QuantCache.loadApiKeys()
   const rate = QuantCache.loadRateSettings()
-  _set('key-alpaca-key',    keys.alpaca_key      || '')
-  _set('key-alpaca-secret', keys.alpaca_secret   || '')
-  _set('key-groq',          keys.groq_key        || '')
-  _set('key-finnhub',       keys.finnhub_key     || '')
-  _set('key-newsapi',       keys.newsapi_key     || '')
-  _set('key-marketaux',     keys.marketaux_token || '')
-  _set('key-base-url',      keys.base_url        || '')
-  if (rate.from)    _set('rate-from',  rate.from)
-  if (rate.until)   _set('rate-until', rate.until)
+  _set('key-alpaca-key',    keys.alpaca_key    || '')
+  _set('key-alpaca-secret', keys.alpaca_secret || '')
+  _set('key-groq',          keys.groq_key      || '')
+  _set('key-finnhub',       keys.finnhub_key   || '')
+  _set('key-base-url',      keys.base_url      || '')
+  if (rate.from)  _set('rate-from',  rate.from)
+  if (rate.until) _set('rate-until', rate.until)
   if (rate.alwaysOn !== undefined) {
     const el = document.getElementById('rate-always-on')
     if (el) el.checked = rate.alwaysOn
@@ -93,9 +78,7 @@ function _calcApiStats(cap, activeMinutes) {
   } else {
     intervalSec = Math.ceil(60 / safeRpm)
   }
-  if (safeRpm) {
-    intervalSec = Math.max(intervalSec, Math.ceil(60 / safeRpm))
-  }
+  if (safeRpm) intervalSec = Math.max(intervalSec, Math.ceil(60 / safeRpm))
   const reqPerDay  = Math.floor((activeMinutes * 60) / intervalSec)
   const reqPerHour = Math.floor(3600 / intervalSec)
   const hh = String(Math.floor(intervalSec / 60)).padStart(2, '0')
@@ -105,9 +88,9 @@ function _calcApiStats(cap, activeMinutes) {
 }
 
 function _rateCalcUpdate() {
-  const alwaysOn = document.getElementById('rate-always-on')?.checked
-  const fromEl   = document.getElementById('rate-from')
-  const untilEl  = document.getElementById('rate-until')
+  const alwaysOn  = document.getElementById('rate-always-on')?.checked
+  const fromEl    = document.getElementById('rate-from')
+  const untilEl   = document.getElementById('rate-until')
   const container = document.getElementById('rate-all-results')
   if (!container) return
 
@@ -126,7 +109,7 @@ function _rateCalcUpdate() {
 
   const windowLabel = alwaysOn
     ? '24h'
-    : `${_get('rate-from') || '07:00'}–${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
+    : `${_get('rate-from') || '07:00'}\u2013${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
 
   const groqStats = _calcApiStats(API_CAPS.find(c => c.id === 'groq'), activeMinutes)
   container.dataset.intervalSec = groqStats.intervalSec
@@ -134,37 +117,20 @@ function _rateCalcUpdate() {
 
   container.innerHTML = API_CAPS.map(cap => {
     const s = _calcApiStats(cap, activeMinutes)
-    const rpdLabel  = cap.rpd  ? `${cap.rpd} req/day`  : '&infin;'
-    const rpmLabel  = cap.rpm  ? `${cap.rpm} RPM`       : '&infin;'
-    const usedLabel = cap.rpd  ? `${s.reqPerDay} <span style="font-size:10px;color:var(--text-muted);">/ ${cap.rpd}</span>` : `${s.reqPerDay}`
+    const rpdLabel  = cap.rpd ? `${cap.rpd} req/day` : '&infin;'
+    const rpmLabel  = cap.rpm ? `${cap.rpm} RPM`      : '&infin;'
+    const usedLabel = cap.rpd ? `${s.reqPerDay} <span style="font-size:10px;color:var(--text-muted);">/ ${cap.rpd}</span>` : `${s.reqPerDay}`
     return `
-      <div style="
-        padding:12px 14px;
-        background:var(--bg-panel);border:1px solid var(--border);
-        border-left:3px solid ${cap.color};
-        border-radius:6px;font-size:12px;line-height:1.8;
-      ">
+      <div style="padding:12px 14px;background:var(--bg-panel);border:1px solid var(--border);border-left:3px solid ${cap.color};border-radius:6px;font-size:12px;line-height:1.8;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <span style="font-size:13px;font-weight:700;color:${cap.color};">${cap.name}</span>
           <span style="font-size:10px;color:var(--text-muted);">${rpmLabel} &nbsp;&middot;&nbsp; ${rpdLabel} &nbsp;&middot;&nbsp; ${cap.note}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;">
-          <div>
-            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Ingest Every</div>
-            <div style="color:${cap.color};font-size:17px;font-weight:700;">${s.intervalLabel}</div>
-          </div>
-          <div>
-            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Hour</div>
-            <div style="color:var(--text-primary);font-size:17px;font-weight:700;">${s.reqPerHour}</div>
-          </div>
-          <div>
-            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Day</div>
-            <div style="font-size:17px;font-weight:700;color:var(--accent-green);">${usedLabel}</div>
-          </div>
-          <div>
-            <div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Window</div>
-            <div style="color:var(--text-muted);font-size:12px;font-weight:600;">${windowLabel}</div>
-          </div>
+          <div><div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Ingest Every</div><div style="color:${cap.color};font-size:17px;font-weight:700;">${s.intervalLabel}</div></div>
+          <div><div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Hour</div><div style="color:var(--text-primary);font-size:17px;font-weight:700;">${s.reqPerHour}</div></div>
+          <div><div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Req / Day</div><div style="font-size:17px;font-weight:700;color:var(--accent-green);">${usedLabel}</div></div>
+          <div><div style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Window</div><div style="color:var(--text-muted);font-size:12px;font-weight:600;">${windowLabel}</div></div>
         </div>
       </div>`
   }).join('')
@@ -175,19 +141,11 @@ async function _rateApply() {
   const intervalSec = parseInt(container?.dataset.intervalSec || '90')
   const safeRpm     = parseInt(container?.dataset.safeRpm     || '25')
   const alwaysOn    = document.getElementById('rate-always-on')?.checked
-
-  QuantCache.saveRateSettings({
-    from:        _get('rate-from'),
-    until:       _get('rate-until'),
-    alwaysOn:    alwaysOn,
-    intervalSec: intervalSec,
-    groqRpm:     safeRpm,
-  })
-
+  QuantCache.saveRateSettings({ from: _get('rate-from'), until: _get('rate-until'), alwaysOn, intervalSec, groqRpm: safeRpm })
   const keys = QuantCache.loadApiKeys()
   try {
     await apiHealth({ ...keys, ingest_interval_sec: intervalSec, groq_rpm: safeRpm })
-    _synchroShowSaveMsg(`Schedule applied — Groq ingest every ${intervalSec}s.`, 'success')
+    _synchroShowSaveMsg(`Schedule applied \u2014 ingest every ${intervalSec}s.`, 'success')
   } catch (e) {
     _synchroShowSaveMsg(`Saved locally. Backend: ${e.message}`, 'warning')
   }
@@ -202,14 +160,11 @@ async function _synchroSave() {
     alpaca_secret:       _get('key-alpaca-secret'),
     groq_key:            _get('key-groq'),
     finnhub_key:         _get('key-finnhub'),
-    newsapi_key:         _get('key-newsapi'),
-    marketaux_token:     _get('key-marketaux'),
     base_url:            _get('key-base-url'),
     groq_rpm:            rate.groqRpm     || 25,
     ingest_interval_sec: rate.intervalSec || 90,
   }
   QuantCache.saveApi(apiKeys)
-
   try {
     await apiHealth(apiKeys)
     _synchroShowSaveMsg('&#10003; Saved. Backend acknowledged.', 'success')
@@ -238,8 +193,6 @@ async function _synchroCheckAll() {
     { name: 'Alpaca',     fn: () => _keyCheck('alpaca_key') },
     { name: 'Groq AI',    fn: () => _keyCheck('groq_key') },
     { name: 'Finnhub',    fn: () => _keyCheck('finnhub_key') },
-    { name: 'NewsAPI',    fn: () => _keyCheck('newsapi_key') },
-    { name: 'Marketaux',  fn: () => _keyCheck('marketaux_token') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
   ]
 
