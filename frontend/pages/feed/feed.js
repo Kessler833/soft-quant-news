@@ -6,7 +6,6 @@ let _feedSoundOn = true
 let _feedAudioCtx = null
 let _feedStatusEs = null
 let _feedRawEs = null
-let _feedKwInterval = null
 
 function _feedGetFilters() {
   return {
@@ -44,7 +43,7 @@ function _feedHideBanner() {
   if (el) el.style.display = 'none'
 }
 
-// ── Status Bar ─────────────────────────────────────────────────────────────
+// ── Status Bar ────────────────────────────────────────────────────────────
 
 function _feedShowStatus(msg) {
   const textEl  = document.getElementById('feed-status-text')
@@ -58,7 +57,6 @@ function _feedShowStatus(msg) {
   const phaseColors = {
     fetching: 'var(--accent-blue)',
     scoring:  'var(--accent-orange)',
-    ai:       '#a9b1d6',
     done:     'var(--accent-green)',
     idle:     'var(--text-muted)',
   }
@@ -75,16 +73,14 @@ function _feedConnectStatusStream() {
     _feedStatusEs.onmessage = (e) => {
       _feedShowStatus(e.data)
       if (e.data.startsWith('done:')) {
-        // Re-fetch and MERGE new articles into the list (don't wipe it)
         setTimeout(_feedMergeLatest, 500)
-        setTimeout(_feedLoadKeywordStatus, 1500)
       }
     }
     _feedStatusEs.onerror = () => {}
   } catch(e) { console.warn('[feed] Status SSE:', e) }
 }
 
-// ── Raw News Panel ───────────────────────────────────────────────────────────
+// ── Raw News Panel ───────────────────────────────────────────────────────────────
 
 function _feedConnectRawStream() {
   if (_feedRawEs) { try { _feedRawEs.close() } catch(_){} }
@@ -101,7 +97,6 @@ function _feedConnectRawStream() {
 function _feedPrependRaw(article) {
   const list = document.getElementById('raw-list')
   if (!list) return
-  // Dedupe by id in raw panel
   if (article.id && list.querySelector(`[data-id="${article.id}"]`)) return
   const rel    = (article.relevance || 'ignore').toLowerCase()
   const time   = article.published_at
@@ -118,44 +113,7 @@ function _feedPrependRaw(article) {
   while (list.children.length > 300) list.removeChild(list.lastChild)
 }
 
-// ── Keyword Status ───────────────────────────────────────────────────────────
-
-function _feedSetKwLoading(on) {
-  const el = document.getElementById('filter-loading')
-  if (el) el.classList.toggle('visible', on)
-}
-
-async function _feedLoadKeywordStatus() {
-  try {
-    const s = await apiFeedKeywordStatus()
-    const lastEl    = document.getElementById('filter-last-update')
-    const nextEl    = document.getElementById('filter-next-update')
-    const countEl   = document.getElementById('filter-kw-counts')
-    const contextEl = document.getElementById('filter-context')
-
-    if (!s.generated_at) {
-      _feedSetKwLoading(true)
-      if (lastEl)  lastEl.textContent  = 'Last update: generating...'
-      if (nextEl)  nextEl.textContent  = 'Next: —'
-      if (countEl) countEl.textContent = ''
-      setTimeout(_feedLoadKeywordStatus, 5000)
-      return
-    }
-
-    _feedSetKwLoading(false)
-    if (lastEl) lastEl.textContent = `Last update: ${_feedRelTime(s.generated_at)}`
-    if (nextEl) {
-      const diff = new Date(s.next_at) - Date.now()
-      nextEl.textContent = diff > 0 ? `Next: in ${Math.round(diff / 60000)}min` : 'Next: overdue'
-    }
-    if (countEl)   countEl.textContent   = s.high_count ? `H:${s.high_count} M:${s.medium_count} L:${s.low_count} keywords` : ''
-    if (contextEl) contextEl.textContent = s.context_note || ''
-  } catch(e) {
-    setTimeout(_feedLoadKeywordStatus, 5000)
-  }
-}
-
-// ── Sound ─────────────────────────────────────────────────────────────────────
+// ── Sound ──────────────────────────────────────────────────────────────────────────
 
 function _feedPlaySound(relevance) {
   if (!_feedSoundOn) return
@@ -175,7 +133,7 @@ function _feedPlaySound(relevance) {
   } catch (_) {}
 }
 
-// ── Card builder ────────────────────────────────────────────────────────────────
+// ── Card builder ───────────────────────────────────────────────────────────────────
 
 function _feedBuildCard(a, withChartBtn = true) {
   const rel     = (a.relevance || 'low').toLowerCase()
@@ -216,7 +174,6 @@ function _feedPrependCard(article) {
   if (!_feedPassesFilters(article)) return
   const list = document.getElementById('feed-list')
   if (!list) return
-  // Dedupe: don't prepend if card with same id already exists
   if (article.id && list.querySelector(`[data-id="${article.id}"]`)) return
   const card = _feedBuildCard(article)
   list.prepend(card)
@@ -224,7 +181,7 @@ function _feedPrependCard(article) {
   while (list.children.length > 200) list.removeChild(list.lastChild)
 }
 
-// ── WebSocket ───────────────────────────────────────────────────────────────────
+// ── WebSocket ──────────────────────────────────────────────────────────────────────
 
 function _feedConnectWs() {
   if (_feedRetryTimer) { clearTimeout(_feedRetryTimer); _feedRetryTimer = null }
@@ -250,7 +207,7 @@ function _feedConnectWs() {
   } catch (e) { console.warn('[feed] WS error:', e) }
 }
 
-// ── Load & render (initial full load, does NOT clear on refresh) ────────────────
+// ── Load & render ─────────────────────────────────────────────────────────────────
 
 async function _feedLoadAndRender() {
   const list = document.getElementById('feed-list')
@@ -275,7 +232,6 @@ async function _feedLoadAndRender() {
   }
 }
 
-// Merge new articles into the list without wiping existing cards
 async function _feedMergeLatest() {
   const list = document.getElementById('feed-list')
   if (!list) return
@@ -288,14 +244,12 @@ async function _feedMergeLatest() {
     if (f.ticker)    params.ticker    = f.ticker
     const articles = await apiFeedLatest(params)
     if (!articles || articles.length === 0) return
-    // If list is showing the empty/loading placeholder, do a full render instead
     const isEmpty = list.children.length === 0 || list.querySelector('.spinner')
     if (isEmpty) {
       list.innerHTML = ''
       articles.forEach(a => list.appendChild(_feedBuildCard(a)))
       return
     }
-    // Prepend only articles not already in the list
     const existingIds = new Set([...list.querySelectorAll('[data-id]')].map(el => el.dataset.id))
     const newArticles = articles.filter(a => a.id && !existingIds.has(a.id))
     newArticles.reverse().forEach(a => {
@@ -307,7 +261,7 @@ async function _feedMergeLatest() {
   }
 }
 
-// ── Chart modal ───────────────────────────────────────────────────────────────────
+// ── Chart modal ──────────────────────────────────────────────────────────────────
 
 async function _feedOpenChart(ticker) {
   const modal     = document.getElementById('feed-chart-modal')
@@ -358,7 +312,7 @@ async function _feedOpenChart(ticker) {
   }
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────────────
 
 function _feedRelTime(iso) {
   if (!iso) return ''
@@ -373,7 +327,7 @@ function _feedEsc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────────────────
 
 async function initFeed() {
   if (_feedInitDone) return
@@ -391,8 +345,6 @@ async function initFeed() {
 
   _feedConnectStatusStream()
   _feedConnectRawStream()
-  _feedLoadKeywordStatus()
-  _feedKwInterval = setInterval(_feedLoadKeywordStatus, 60000)
 
   await _feedLoadAndRender()
   _feedConnectWs()
@@ -412,37 +364,6 @@ async function initFeed() {
       _feedSoundOn = !_feedSoundOn
       soundBtn.textContent = _feedSoundOn ? '♪ Sound ON' : '♪ Sound OFF'
       soundBtn.classList.toggle('active', _feedSoundOn)
-    })
-  }
-
-  const updateBtn = document.getElementById('filter-update-btn')
-  if (updateBtn) {
-    updateBtn.addEventListener('click', async () => {
-      updateBtn.disabled = true
-      updateBtn.textContent = '↻ Updating...'
-      _feedSetKwLoading(true)
-      try { await apiFeedRefreshKeywords() } catch(_) {}
-      // Poll until generated_at changes (compare to current value)
-      const currentGenAt = document.getElementById('filter-last-update')?.textContent || ''
-      const poll = setInterval(async () => {
-        const s = await apiFeedKeywordStatus().catch(() => null)
-        if (s && s.generated_at) {
-          const newLabel = `Last update: ${_feedRelTime(s.generated_at)}`
-          if (newLabel !== currentGenAt) {
-            clearInterval(poll)
-            await _feedLoadKeywordStatus()
-            updateBtn.disabled = false
-            updateBtn.textContent = '↻ Update Filter Now'
-          }
-        }
-      }, 2000)
-      // Safety timeout: re-enable after 30s regardless
-      setTimeout(() => {
-        clearInterval(poll)
-        updateBtn.disabled = false
-        updateBtn.textContent = '↻ Update Filter Now'
-        _feedSetKwLoading(false)
-      }, 30000)
     })
   }
 
