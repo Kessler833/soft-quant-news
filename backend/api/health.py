@@ -90,13 +90,12 @@ async def _post_key_tasks(groq_key: str) -> None:
     """Run after keys are stored: refresh keywords if no cache exists, then ingest."""
     from backend.api.feed import refresh_keywords, ingest_all_sources
 
-    if groq_key:
-        kw = db.get_latest_keywords()
-        if not kw:
-            logger.info('[health] No keyword cache — triggering immediate refresh.')
-            await refresh_keywords(force=True)
-        else:
-            logger.info('[health] Keyword cache exists — skipping forced refresh.')
+    kw = db.get_latest_keywords()
+    if not kw:
+        logger.info('[health] No keyword cache — triggering immediate refresh.')
+        await refresh_keywords(force=True)
+    else:
+        logger.info('[health] Keyword cache exists — skipping forced refresh.')
 
     await ingest_all_sources()
 
@@ -157,3 +156,9 @@ async def reset_cache():
 @router.get('/health')
 async def get_health():
     return {'status': 'ok'}
+
+
+@router.get('/health/local-ai')
+async def local_ai_health():
+    from backend.api.local_ai import check_health
+    return await check_health()

@@ -1,4 +1,4 @@
-// ── API rate caps (free tier) ─────────────────────────────────────────────────
+// ── API rate caps (free tier) ───────────────────────────────────────────────────
 const API_CAPS = [
   { id: 'groq',      name: 'Groq AI',   rpm: 30,   rpd: 1000, color: 'var(--accent-blue)',   note: 'console.groq.com' },
   { id: 'finnhub',   name: 'Finnhub',   rpm: 60,   rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
@@ -34,11 +34,9 @@ async function initSynchro() {
 }
 
 // Push whatever is in QuantCache to the backend immediately.
-// This ensures keys are available even if the user never clicks Save.
 async function _synchroPushKeysToBackend() {
   const keys = QuantCache.loadApiKeys()
   const rate = QuantCache.loadRateSettings()
-  // Only push if at least one key is saved
   const hasAnyKey = Object.values(keys).some(v => v && String(v).trim().length > 0)
   if (!hasAnyKey) return
   try {
@@ -50,7 +48,6 @@ async function _synchroPushKeysToBackend() {
     console.log('[synchro] Keys auto-pushed to backend on launch.')
   } catch (e) {
     console.warn('[synchro] Auto-push failed (backend may still be starting):', e.message)
-    // Retry once after 3s in case backend was still booting
     setTimeout(async () => {
       try {
         await apiHealth({
@@ -75,7 +72,7 @@ function _synchroLoadFields() {
   _set('key-marketaux',       keys.marketaux_token || '')
   _set('key-base-url',        keys.base_url        || '')
   _set('key-local-llm-url',   keys.local_llm_url   || '')
-  _set('key-local-llm-model', keys.local_llm_model || '')
+  _set('key-local-llm-model', keys.local_llm_model || 'qwen2.5:3b')
   if (rate.from)    _set('rate-from',  rate.from)
   if (rate.until)   _set('rate-until', rate.until)
   if (rate.alwaysOn !== undefined) {
@@ -84,7 +81,7 @@ function _synchroLoadFields() {
   }
 }
 
-// ── Rate Limit Calculator ─────────────────────────────────────────────────────
+// ── Rate Limit Calculator ───────────────────────────────────────────────────
 
 function _calcApiStats(cap, activeMinutes) {
   const BUFFER = 0.85
@@ -129,7 +126,7 @@ function _rateCalcUpdate() {
 
   const windowLabel = alwaysOn
     ? '24h'
-    : `${_get('rate-from') || '07:00'}–${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
+    : `${_get('rate-from') || '07:00'}\u2013${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
 
   const groqStats = _calcApiStats(API_CAPS.find(c => c.id === 'groq'), activeMinutes)
   container.dataset.intervalSec = groqStats.intervalSec
@@ -196,7 +193,7 @@ async function _rateApply() {
   }
 }
 
-// ── Save keys ─────────────────────────────────────────────────────────────────
+// ── Save keys ───────────────────────────────────────────────────────────────
 
 async function _synchroSave() {
   const rate = QuantCache.loadRateSettings()
@@ -246,6 +243,7 @@ async function _synchroCheckAll() {
     { name: 'NewsAPI',    fn: () => _keyCheck('newsapi_key') },
     { name: 'Marketaux',  fn: () => _keyCheck('marketaux_token') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
+    { name: 'Local AI',   fn: () => fetch('http://localhost:8000/api/health/local-ai').then(r => r.json()).then(j => j.status === 'online' ? `Online (${j.model})` : j.status === 'not_configured' ? 'Not configured' : j.status === 'model_missing' ? `Model missing (${j.model})` : 'Offline') },
   ]
 
   grid.innerHTML = checks.map(c => `
@@ -261,7 +259,7 @@ async function _synchroCheckAll() {
       const result = await Promise.race([c.fn(), new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 4000))])
       if (el) {
         el.textContent = result
-        el.className = `status-tile-val ${result === 'Missing' || result.includes('Error') ? 'status-warn' : 'status-ok'}`
+        el.className = `status-tile-val ${result === 'Missing' || result.includes('Error') || result === 'Offline' || result === 'Not configured' ? 'status-warn' : 'status-ok'}`
       }
     } catch (e) {
       if (el) { el.textContent = 'Offline'; el.className = 'status-tile-val status-error' }
@@ -284,7 +282,7 @@ function _wsCheck() {
   })
 }
 
-// ── Feed stats ────────────────────────────────────────────────────────────────
+// ── Feed stats ──────────────────────────────────────────────────────────────
 
 async function _synchroLoadStats() {
   const el = document.getElementById('synchro-stats')
@@ -307,13 +305,13 @@ async function _synchroLoadStats() {
   }
 }
 
-// ── Misc ──────────────────────────────────────────────────────────────────────
+// ── Misc ───────────────────────────────────────────────────────────────────────
 
 async function _synchroSoftReset() {
   if (!confirm('Clear all articles, AI cache, and keywords? Watchlist and API keys will be preserved.')) return
   try {
     await apiResetCache()
-    _synchroShowSaveMsg('✓ Article cache cleared. Restart to re-ingest.', 'success')
+    _synchroShowSaveMsg('\u2713 Article cache cleared. Restart to re-ingest.', 'success')
   } catch (e) {
     _synchroShowSaveMsg(`Reset failed: ${e.message}`, 'error')
   }

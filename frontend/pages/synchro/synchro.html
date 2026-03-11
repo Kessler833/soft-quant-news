@@ -10,7 +10,7 @@
     <!-- System Status -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">System Status</div>
-      <div id="synchro-status-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+      <div id="synchro-status-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;"></div>
       <button id="synchro-check-btn" class="synchro-btn" style="margin-top:10px;">&#8635; Re-check All</button>
     </div>
 
@@ -26,7 +26,7 @@
         <input id="key-alpaca-secret" class="synchro-input" type="password" placeholder="&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;"/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Groq API Key <span style="font-size:10px;color:var(--text-muted);">(free at console.groq.com &mdash; 1000 req/day, 30 RPM)</span></label>
+        <label class="synchro-label">Groq API Key <span style="font-size:10px;color:var(--text-muted);">(free at console.groq.com &mdash; 1000 req/day, 30 RPM &mdash; optional, fallback only)</span></label>
         <input id="key-groq" class="synchro-input" type="password" placeholder="gsk_..."/>
       </div>
       <div class="synchro-field-group">
@@ -48,27 +48,28 @@
       <div id="synchro-save-msg" style="margin-top:8px;"></div>
     </div>
 
-    <!-- Local LLM -->
+    <!-- Local AI Engine -->
     <div style="margin-bottom:24px;">
-      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Local LLM <span style="font-size:10px;color:var(--text-muted);">(Ollama / LM Studio / llama.cpp)</span></div>
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">Local AI Engine <span style="font-size:10px;color:var(--accent-green);">&#9679; Primary</span></div>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.6;">
-        Run AI news grading locally instead of using Groq cloud.<br>
+        All news grading runs locally on your PC &mdash; zero cloud dependency. The AI generates its own market context report every 30min to stay aware of current conditions.<br>
         <strong style="color:var(--text-primary);">Quick setup:</strong>
         <span style="font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--bg-tertiary);padding:2px 6px;border-radius:3px;">
           1. Install <a href="https://ollama.com" style="color:var(--accent-blue);" target="_blank">Ollama</a>
-          &nbsp;→&nbsp; 2. Run: ollama pull llama3.1:8b
-          &nbsp;→&nbsp; 3. Set URL below to http://localhost:11434
+          &nbsp;&rarr;&nbsp; 2. Run: ollama pull qwen2.5:3b
+          &nbsp;&rarr;&nbsp; 3. Set URL below to http://localhost:11434
         </span>
-        <br><span style="font-size:11px;">For best accuracy matching Groq, use <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;">llama3.3:70b</code> (requires ~40GB RAM) or <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;">llama3.1:8b</code> (requires ~5GB RAM).</span>
+        <br><span style="font-size:11px;">Recommended: <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;">qwen2.5:3b</code> (~2GB, best JSON reliability) or <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;">qwen2.5:7b</code> (~5GB, higher accuracy).</span>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Local LLM URL</label>
+        <label class="synchro-label">Ollama URL</label>
         <input id="key-local-llm-url" class="synchro-input" type="text" placeholder="http://localhost:11434"/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Local LLM Model</label>
-        <input id="key-local-llm-model" class="synchro-input" type="text" placeholder="llama3.1:8b"/>
+        <label class="synchro-label">Model</label>
+        <input id="key-local-llm-model" class="synchro-input" type="text" placeholder="qwen2.5:3b"/>
       </div>
+      <div id="local-ai-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
     </div>
 
     <!-- Rate Limit Planner -->
@@ -119,9 +120,9 @@
     <!-- Danger Zone -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;color:var(--accent-red);">&#9888; Danger Zone</div>
-      <button id="synchro-soft-reset-btn" class="synchro-btn synchro-btn--danger" style="margin-bottom:8px;">⟳ Reset Article Cache</button>
+      <button id="synchro-soft-reset-btn" class="synchro-btn synchro-btn--danger" style="margin-bottom:8px;">&#10119; Reset Article Cache</button>
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">Clears all articles, AI cache, and keywords from the database. Preserves watchlist and API keys.</div>
-      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">⚠ Full Reset (includes API keys)</button>
+      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">&#9888; Full Reset (includes API keys)</button>
       <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears ALL browser data including API keys. You will need to re-enter all keys.</div>
     </div>
 
