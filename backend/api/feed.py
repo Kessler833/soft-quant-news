@@ -158,6 +158,71 @@ def _emit_raw(article: dict):
         except: pass
 
 
+# ── SSE route handlers ────────────────────────────────────────────────────────
+
+@router.get('/ingest-status')
+async def stream_ingest_status():
+    """SSE stream that emits ingest progress messages (fetching / scoring / done)."""
+    import asyncio as _asyncio
+    q: asyncio.Queue = asyncio.Queue(maxsize=64)
+    _status_queues.append(q)
+
+    async def _gen():
+        try:
+            while True:
+                try:
+                    msg = await _asyncio.wait_for(q.get(), timeout=25)
+                    yield f'data: {msg}\n\n'
+                except _asyncio.TimeoutError:
+                    # keep-alive ping so the connection stays open
+                    yield ': ping\n\n'
+        except GeneratorExit:
+            pass
+        finally:
+            try: _status_queues.remove(q)
+            except ValueError: pass
+
+    return StreamingResponse(
+        _gen(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+@router.get('/raw-stream')
+async def stream_raw_articles():
+    """SSE stream that emits each newly ingested article as a JSON payload."""
+    import asyncio as _asyncio
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    _raw_queues.append(q)
+
+    async def _gen():
+        try:
+            while True:
+                try:
+                    payload = await _asyncio.wait_for(q.get(), timeout=25)
+                    yield f'data: {payload}\n\n'
+                except _asyncio.TimeoutError:
+                    yield ': ping\n\n'
+        except GeneratorExit:
+            pass
+        finally:
+            try: _raw_queues.remove(q)
+            except ValueError: pass
+
+    return StreamingResponse(
+        _gen(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
 # ── Normalisation / ID ────────────────────────────────────────────────────────
 
 def _make_id(title):
