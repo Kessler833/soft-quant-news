@@ -22,12 +22,10 @@ async def _ensure_model_pulled(model: str = DEFAULT_MODEL) -> None:
     """Pull the model via Ollama if it is not already present locally."""
     url = config.get('ollama_url', 'http://localhost:11434').rstrip('/')
     try:
-        # Check which models are already available
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f'{url}/api/tags')
             if r.status_code == 200:
                 installed = [m['name'] for m in r.json().get('models', [])]
-                # Ollama model names may include a tag like "phi4-mini:latest"
                 already_present = any(
                     m == model or m.startswith(model + ':')
                     for m in installed
@@ -37,7 +35,6 @@ async def _ensure_model_pulled(model: str = DEFAULT_MODEL) -> None:
                     return
 
         logger.info(f'[main] Model "{model}" not found — pulling now (this may take a few minutes)...')
-        # /api/pull streams NDJSON; we use stream=True and drain it so we get progress logs
         async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream(
                 'POST',
@@ -52,6 +49,23 @@ async def _ensure_model_pulled(model: str = DEFAULT_MODEL) -> None:
     except Exception as e:
         logger.warning(f'[main] Could not pull model "{model}": {e}. '
                        'Make sure Ollama is running before using AI features.')
+
+
+async def _warm_model(model: str = DEFAULT_MODEL) -> None:
+    """Send a minimal generate request so Ollama loads the model weights into RAM.
+    This eliminates the cold-start delay on the first real user request."""
+    url = config.get('ollama_url', 'http://localhost:11434').rstrip('/')
+    logger.info(f'[main] Pre-warming model "{model}" into RAM...')
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(
+                f'{url}/api/generate',
+                json={'model': model, 'prompt': 'hi', 'stream': False},
+            )
+            r.raise_for_status()
+        logger.info(f'[main] Model "{model}" is warm and ready.')
+    except Exception as e:
+        logger.warning(f'[main] Model warm-up failed (non-fatal): {e}')
 
 
 @asynccontextmanager
@@ -69,8 +83,12 @@ async def lifespan(application: FastAPI):
 
     async def _startup_tasks():
         logger.info('[main] Running startup tasks...')
-        # Auto-install the default model so the user never has to
-        await _ensure_model_pulled(config.get('ollama_model', DEFAULT_MODEL))
+        model = config.get('ollama_model', DEFAULT_MODEL)
+        # 1. Pull model if not present
+        await _ensure_model_pulled(model)
+        # 2. Pre-warm: load model weights into RAM so first user request is instant
+        await _warm_model(model)
+        # 3. Remaining startup work
         try: await update_polymarket()
         except Exception as e: logger.warning(f'[main] Startup polymarket: {e}')
         try: await ingest_all_sources()
