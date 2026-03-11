@@ -14,6 +14,7 @@ const path = require('path')
 const fs = require('fs')
 const http = require('http')
 const https = require('https')
+const os = require('os')
 
 const OLLAMA_PORT = 11434
 const OLLAMA_HOST = `http://127.0.0.1:${OLLAMA_PORT}`
@@ -45,7 +46,6 @@ async function _retryFileOp(fn, retries = 10, delay = 500) {
   }
 }
 
-// Silently remove a file — never throws, ignores ENOENT / EBUSY
 function _tryDelete(filePath) {
   try { fs.unlinkSync(filePath) } catch (_) {}
 }
@@ -126,25 +126,30 @@ function downloadBinary(onProgress, onStatus) {
     try {
       if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true })
 
-      const tmpPath = OLLAMA_BIN + '.tmp'
+      // Use system TEMP so Windows Defender doesn't block execution from AppData
+      const installerPath = path.join(os.tmpdir(), 'OllamaSetup.exe')
 
-      // Always wipe any stale/partial .tmp from a previous interrupted install
-      if (fs.existsSync(tmpPath)) {
+      // Clean up any stale installer from a previous interrupted run
+      if (fs.existsSync(installerPath)) {
         onStatus('Cleaning up previous incomplete download...')
-        _tryDelete(tmpPath)
-        await _sleep(500) // give Windows a moment to fully release the file handle
+        _tryDelete(installerPath)
+        await _sleep(500)
       }
 
       onStatus('Fetching latest Ollama release info...')
       const { url, isInstaller } = await _getBinaryUrl()
       onStatus(`Downloading Ollama (${url.split('/').pop()})...`)
 
-      await _streamToFile(url, tmpPath, onProgress)
-
       if (isInstaller) {
+        // Download directly into TEMP
+        await _streamToFile(url, installerPath, onProgress)
+
         onStatus('Running Ollama installer (silent)...')
         await new Promise((res2, rej2) => {
-          const proc = spawn(tmpPath, ['/VERYSILENT', '/NORESTART'], { stdio: 'ignore', detached: false })
+          const proc = spawn(installerPath, ['/VERYSILENT', '/NORESTART'], {
+            stdio: 'ignore',
+            detached: false,
+          })
           proc.on('exit', code => { if (code === 0) res2(); else rej2(new Error(`Installer exited with code ${code}`)) })
           proc.on('error', rej2)
         })
@@ -152,16 +157,21 @@ function downloadBinary(onProgress, onStatus) {
         onStatus('Waiting for installer to release file locks...')
         await _sleep(2000)
 
-        await _retryFileOp(() => fs.unlinkSync(tmpPath))
+        _tryDelete(installerPath)
 
+        // Copy the installed binary to our managed location
         const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
         if (fs.existsSync(systemBin)) {
           onStatus('Copying Ollama binary...')
           await _retryFileOp(() => fs.copyFileSync(systemBin, OLLAMA_BIN))
         } else {
+          // Fallback: ollama is in PATH after install
           fs.writeFileSync(OLLAMA_BIN.replace('.exe', '.cmd'), `@echo off\nollama %*\n`)
         }
       } else {
+        const tmpPath = OLLAMA_BIN + '.tmp'
+        _tryDelete(tmpPath)
+        await _streamToFile(url, tmpPath, onProgress)
         await _retryFileOp(() => fs.renameSync(tmpPath, OLLAMA_BIN))
         if (process.platform !== 'win32') fs.chmodSync(OLLAMA_BIN, 0o755)
       }
