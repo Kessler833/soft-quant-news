@@ -6,11 +6,12 @@ const http = require('http')
 const { runSetup }   = require('./setup-window')
 const { stopOllama } = require('./ollama-manager')
 
-let mainWindow     = null
-let fastApiProcess = null
-let _shuttingDown  = false
+let mainWindow      = null
+let fastApiProcess  = null
+let _shuttingDown   = false
+let _mainWindowShown = false  // guard: don't quit while setup window is closing
 
-// ── Safe shutdown ────────────────────────────────────────────────────────────
+// ── Safe shutdown ────────────────────────────────────────────────────────────────
 
 function safeShutdown(reason) {
   if (_shuttingDown) return
@@ -30,13 +31,20 @@ function safeShutdown(reason) {
 }
 
 app.on('before-quit',       () => safeShutdown('before-quit'))
-app.on('window-all-closed', () => { safeShutdown('window-all-closed'); app.quit() })
-process.on('SIGTERM',       () => { safeShutdown('SIGTERM');  process.exit(0) })
-process.on('SIGINT',        () => { safeShutdown('SIGINT');   process.exit(0) })
+app.on('window-all-closed', () => {
+  // Only quit if the main window has already been shown at least once.
+  // This prevents quitting when just the setup window closes.
+  if (_mainWindowShown) {
+    safeShutdown('window-all-closed')
+    app.quit()
+  }
+})
+process.on('SIGTERM',            () => { safeShutdown('SIGTERM');  process.exit(0) })
+process.on('SIGINT',             () => { safeShutdown('SIGINT');   process.exit(0) })
 process.on('uncaughtException',  err    => { console.error('[main] Uncaught:', err); safeShutdown('uncaughtException'); process.exit(1) })
 process.on('unhandledRejection', reason => { console.error('[main] Unhandled rejection:', reason) })
 
-// ── Backend ─────────────────────────────────────────────────────────────────
+// ── Backend ───────────────────────────────────────────────────────────────────────
 
 function startBackend() {
   const root       = path.join(__dirname, '..')
@@ -68,7 +76,7 @@ function waitForBackend(retries = 40, delay = 500) {
   })
 }
 
-// ── Main window ────────────────────────────────────────────────────────────
+// ── Main window ────────────────────────────────────────────────────────────────────
 
 async function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -81,13 +89,14 @@ async function createMainWindow() {
   })
   await mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'index.html'))
   mainWindow.show()
+  _mainWindowShown = true  // from now on, window-all-closed should quit the app
   if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools()
   }
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
-// ── Boot sequence ────────────────────────────────────────────────────────────
+// ── Boot sequence ───────────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
   // 1. Show setup window (installs Ollama if needed, skips instantly if already ready)
