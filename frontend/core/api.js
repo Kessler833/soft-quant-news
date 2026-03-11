@@ -30,7 +30,7 @@ async function _delete(path) {
   return r.json()
 }
 
-async function apiHealth(keysObj) { return _post('/api/health', keysObj) }
+async function apiHealth(keysObj)     { return _post('/api/health', keysObj) }
 async function apiFeedLatest(params = {}) {
   const qs = new URLSearchParams()
   if (params.limit)     qs.set('limit', params.limit)
@@ -41,7 +41,7 @@ async function apiFeedLatest(params = {}) {
   const q = qs.toString()
   return _get('/api/feed/latest' + (q ? '?' + q : ''))
 }
-async function apiFeedTicker(symbol) { return _get('/api/feed/ticker/' + encodeURIComponent(symbol)) }
+async function apiFeedTicker(symbol)  { return _get('/api/feed/ticker/' + encodeURIComponent(symbol)) }
 async function apiFeedAll(params = {}) {
   const qs = new URLSearchParams()
   if (params.limit)     qs.set('limit', params.limit || 200)
@@ -54,8 +54,6 @@ async function apiFeedAll(params = {}) {
 }
 async function apiAnalysisSentiment() { return _get('/api/analysis/sentiment') }
 async function apiAnalysisHeatmap()   { return _get('/api/analysis/heatmap') }
-async function apiAnalysisNarrative() { return _get('/api/analysis/narrative') }
-async function apiAnalysisWsb()       { return _get('/api/analysis/wsb') }
 async function apiPolymarkets()       { return _get('/api/polymarket/markets') }
 async function apiPolymarketAlerts()  { return _get('/api/polymarket/alerts') }
 async function apiPriceQuote(symbol)  { return _get('/api/prices/quote?symbol=' + encodeURIComponent(symbol)) }
@@ -70,5 +68,3 @@ async function apiAiPremarketBrief()  { return _get('/api/ai/premarket-brief') }
 async function apiAiMacroNarrative()  { return _get('/api/ai/macro-narrative') }
 async function apiAiChat(question, contextHours = 4) { return _post('/api/ai/chat', { question, context_hours: contextHours }) }
 async function apiAiBullBear(ticker)  { return _post('/api/ai/bull-bear', { ticker }) }
-async function apiFeedKeywordStatus() { return _get('/api/feed/keyword-status') }
-async function apiFeedRefreshKeywords() { return _post('/api/feed/refresh-keywords', {}) }
