@@ -40,6 +40,26 @@
       <div id="synchro-save-msg" style="margin-top:8px;"></div>
     </div>
 
+    <!-- Ollama (Local AI) -->
+    <div style="margin-bottom:24px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#10022; Ollama (Local AI)</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
+        Required for AI features. Run <code style="color:var(--accent-blue);background:var(--bg-tertiary);padding:1px 5px;border-radius:3px;">ollama serve</code> locally, then enter the URL and model name below.
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Ollama Base URL</label>
+        <input id="key-ollama-url" class="synchro-input" type="text" placeholder="http://localhost:11434"/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Ollama Model <span style="font-size:10px;color:var(--text-muted);">e.g. llama3, mistral, phi3</span></label>
+        <input id="key-ollama-model" class="synchro-input" type="text" placeholder="llama3"/>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button id="synchro-ollama-save-btn" class="synchro-btn synchro-btn--primary">&#10003; Save Ollama Settings</button>
+      </div>
+      <div id="synchro-ollama-msg" style="margin-top:8px;"></div>
+    </div>
+
     <!-- Rate Limit Planner -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Rate Limit Planner</div>
