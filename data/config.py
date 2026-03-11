@@ -1,6 +1,9 @@
 # Centralized API key store — module-level, mutated at runtime.
 
-KEYS = {}
+KEYS = {
+    'ollama_url':   'http://localhost:11434',
+    'ollama_model': 'llama3',
+}
 
 
 def set_keys(keys_dict: dict) -> None:
