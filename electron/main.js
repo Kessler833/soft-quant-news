@@ -21,6 +21,12 @@ let mainWindow     = null
 let fastApiProcess = null
 let _shuttingDown  = false
 
+// ── Ollama state cache (for late-joining Synchro tab) ────────────────────────
+// Stores the last event so Synchro can catch up when it opens after events fired
+let _ollamaState = { type: 'idle' }  // idle | step | progress | status | done | error
+
+ipcMain.handle('ollama:get-state', () => _ollamaState)
+
 // ── Safe shutdown ────────────────────────────────────────────────────────────
 
 function safeShutdown(reason) {
@@ -108,10 +114,16 @@ async function createMainWindow() {
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
+// ── Helper: send + cache an Ollama IPC event ─────────────────────────────────
+
+function ollamaSend(channel, data) {
+  _ollamaState = { type: channel.replace('ollama:', ''), ...data }
+  mainWindow?.webContents.send(channel, data)
+}
+
 // ── Boot sequence ────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  // 1. Start backend immediately — no Ollama blocking
   startBackend()
 
   try {
@@ -125,14 +137,13 @@ app.whenReady().then(async () => {
     return
   }
 
-  // 2. Start Ollama in background after window is open
-  //    IPC events go live to the Synchro tab's download manager card
+  // Start Ollama in background after window is open
   ensureOllama({
-    onStep:     (step, total, label) => mainWindow?.webContents.send('ollama:step',     { step, total, label }),
-    onProgress: (downloaded, total)  => mainWindow?.webContents.send('ollama:progress', { downloaded, total, pct: Math.round((downloaded / total) * 100) }),
-    onStatus:   msg                  => mainWindow?.webContents.send('ollama:status',   { msg }),
-    onDone:     ()                   => mainWindow?.webContents.send('ollama:done',     {}),
-    onError:    err                  => mainWindow?.webContents.send('ollama:error',    { msg: err.message }),
+    onStep:     (step, total, label) => ollamaSend('ollama:step',     { step, total, label }),
+    onProgress: (downloaded, total)  => ollamaSend('ollama:progress', { downloaded, total, pct: Math.round((downloaded / total) * 100) }),
+    onStatus:   msg                  => ollamaSend('ollama:status',   { msg }),
+    onDone:     ()                   => ollamaSend('ollama:done',     {}),
+    onError:    err                  => ollamaSend('ollama:error',    { msg: err.message }),
   })
 })
 

@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOllamaStatus:   (cb) => ipcRenderer.on('ollama:status',   (_e, d) => cb(d)),
   onOllamaDone:     (cb) => ipcRenderer.on('ollama:done',     (_e, d) => cb(d)),
   onOllamaError:    (cb) => ipcRenderer.on('ollama:error',    (_e, d) => cb(d)),
+  // One-shot: get the last known Ollama state (in case events fired before Synchro was open)
+  getOllamaState:   () => ipcRenderer.invoke('ollama:get-state'),
 })
