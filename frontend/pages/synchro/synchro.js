@@ -1,6 +1,5 @@
 // ── API rate caps (active sources only) ──────────────────────────────────────
 const API_CAPS = [
-  { id: 'groq',    name: 'Groq AI',  rpm: 30,  rpd: 1000, color: 'var(--accent-blue)',   note: 'console.groq.com' },
   { id: 'finnhub', name: 'Finnhub',  rpm: 60,  rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
   { id: 'alpaca',  name: 'Alpaca',   rpm: 200, rpd: null, color: 'var(--text-primary)',   note: 'Data stream' },
 ]
@@ -36,7 +35,6 @@ async function _synchroPushKeysToBackend() {
   try {
     await apiHealth({
       ...keys,
-      groq_rpm:            rate.groqRpm     || 25,
       ingest_interval_sec: rate.intervalSec || 90,
     })
     console.log('[synchro] Keys auto-pushed to backend on launch.')
@@ -44,7 +42,7 @@ async function _synchroPushKeysToBackend() {
     console.warn('[synchro] Auto-push failed:', e.message)
     setTimeout(async () => {
       try {
-        await apiHealth({ ...QuantCache.loadApiKeys(), groq_rpm: 25, ingest_interval_sec: 90 })
+        await apiHealth({ ...QuantCache.loadApiKeys(), ingest_interval_sec: 90 })
       } catch (_) {}
     }, 3000)
   }
@@ -55,8 +53,8 @@ function _synchroLoadFields() {
   const rate = QuantCache.loadRateSettings()
   _set('key-alpaca-key',    keys.alpaca_key    || '')
   _set('key-alpaca-secret', keys.alpaca_secret || '')
-  _set('key-groq',          keys.groq_key      || '')
   _set('key-finnhub',       keys.finnhub_key   || '')
+  _set('key-newsapi',       keys.newsapi_key   || '')
   _set('key-base-url',      keys.base_url      || '')
   if (rate.from)  _set('rate-from',  rate.from)
   if (rate.until) _set('rate-until', rate.until)
@@ -111,9 +109,9 @@ function _rateCalcUpdate() {
     ? '24h'
     : `${_get('rate-from') || '07:00'}\u2013${_get('rate-until') || '22:00'} (${Math.round(activeMinutes / 60 * 10) / 10}h)`
 
-  const groqStats = _calcApiStats(API_CAPS.find(c => c.id === 'groq'), activeMinutes)
-  container.dataset.intervalSec = groqStats.intervalSec
-  container.dataset.safeRpm     = groqStats.safeRpm
+  const firstCap = API_CAPS[0]
+  const firstStats = _calcApiStats(firstCap, activeMinutes)
+  container.dataset.intervalSec = firstStats.intervalSec
 
   container.innerHTML = API_CAPS.map(cap => {
     const s = _calcApiStats(cap, activeMinutes)
@@ -139,12 +137,11 @@ function _rateCalcUpdate() {
 async function _rateApply() {
   const container   = document.getElementById('rate-all-results')
   const intervalSec = parseInt(container?.dataset.intervalSec || '90')
-  const safeRpm     = parseInt(container?.dataset.safeRpm     || '25')
   const alwaysOn    = document.getElementById('rate-always-on')?.checked
-  QuantCache.saveRateSettings({ from: _get('rate-from'), until: _get('rate-until'), alwaysOn, intervalSec, groqRpm: safeRpm })
+  QuantCache.saveRateSettings({ from: _get('rate-from'), until: _get('rate-until'), alwaysOn, intervalSec })
   const keys = QuantCache.loadApiKeys()
   try {
-    await apiHealth({ ...keys, ingest_interval_sec: intervalSec, groq_rpm: safeRpm })
+    await apiHealth({ ...keys, ingest_interval_sec: intervalSec })
     _synchroShowSaveMsg(`Schedule applied \u2014 ingest every ${intervalSec}s.`, 'success')
   } catch (e) {
     _synchroShowSaveMsg(`Saved locally. Backend: ${e.message}`, 'warning')
@@ -158,10 +155,9 @@ async function _synchroSave() {
   const apiKeys = {
     alpaca_key:          _get('key-alpaca-key'),
     alpaca_secret:       _get('key-alpaca-secret'),
-    groq_key:            _get('key-groq'),
     finnhub_key:         _get('key-finnhub'),
+    newsapi_key:         _get('key-newsapi'),
     base_url:            _get('key-base-url'),
-    groq_rpm:            rate.groqRpm     || 25,
     ingest_interval_sec: rate.intervalSec || 90,
   }
   QuantCache.saveApi(apiKeys)
@@ -191,8 +187,8 @@ async function _synchroCheckAll() {
     { name: 'Backend',    fn: () => fetch('http://localhost:8000/api/health').then(r => r.ok ? 'Online' : 'Error') },
     { name: 'WebSocket',  fn: () => _wsCheck() },
     { name: 'Alpaca',     fn: () => _keyCheck('alpaca_key') },
-    { name: 'Groq AI',    fn: () => _keyCheck('groq_key') },
     { name: 'Finnhub',    fn: () => _keyCheck('finnhub_key') },
+    { name: 'NewsAPI',    fn: () => _keyCheck('newsapi_key') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
   ]
 

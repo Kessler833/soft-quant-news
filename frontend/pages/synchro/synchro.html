@@ -26,12 +26,12 @@
         <input id="key-alpaca-secret" class="synchro-input" type="password" placeholder="&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;"/>
       </div>
       <div class="synchro-field-group">
-        <label class="synchro-label">Groq API Key <span style="font-size:10px;color:var(--text-muted);">(free at console.groq.com &mdash; 1000 req/day, 30 RPM)</span></label>
-        <input id="key-groq" class="synchro-input" type="password" placeholder="gsk_..."/>
-      </div>
-      <div class="synchro-field-group">
         <label class="synchro-label">Finnhub Key <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 60 req/min)</span></label>
         <input id="key-finnhub" class="synchro-input" type="password" placeholder=""/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">NewsAPI Key <span style="font-size:10px;color:var(--text-muted);">(newsapi.org)</span></label>
+        <input id="key-newsapi" class="synchro-input" type="password" placeholder=""/>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px;">
         <button id="synchro-save-btn" class="synchro-btn synchro-btn--primary">&#10003; Save &amp; Apply</button>
@@ -44,7 +44,7 @@
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Rate Limit Planner</div>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
-        Calculates the optimal ingest interval for each API so your daily quota lasts the full active window &mdash; with a <strong style="color:var(--text-primary);">15% buffer</strong>.
+        Calculates the optimal ingest interval so your daily quota lasts the full active window &mdash; with a <strong style="color:var(--text-primary);">15% buffer</strong>.
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
         <div class="synchro-field-group" style="margin-bottom:0;">

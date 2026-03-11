@@ -1,8 +1,6 @@
 import asyncio
 import hashlib
-import json
 import logging
-import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -15,7 +13,6 @@ from data import config, db
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_groq_sem = asyncio.Semaphore(1)
 _status_queues: list = []
 _raw_queues: list = []
 
@@ -59,33 +56,15 @@ _CATALYST_MAP = {
     'Geopolitical': ['war', 'sanction', 'tariff', 'trade', 'china', 'russia', 'iran', 'opec'],
 }
 
-_cached_kw = {'high': None, 'medium': None, 'low': None, '_loaded_at': None}
-
-
-def _get_active_keywords():
-    now = datetime.now(timezone.utc)
-    if _cached_kw['_loaded_at'] and (now - _cached_kw['_loaded_at']).seconds < 300:
-        return _cached_kw['high'], _cached_kw['medium'], _cached_kw['low']
-    kw = db.get_latest_keywords()
-    if kw:
-        high   = list(set(_BASE_HIGH   + [k.lower() for k in kw['high_kw']]))
-        medium = list(set(_BASE_MEDIUM + [k.lower() for k in kw['medium_kw']]))
-        low    = list(set(_BASE_LOW    + [k.lower() for k in kw['low_kw']]))
-    else:
-        high, medium, low = _BASE_HIGH, _BASE_MEDIUM, _BASE_LOW
-    _cached_kw.update({'high': high, 'medium': medium, 'low': low, '_loaded_at': now})
-    return high, medium, low
-
 
 def rule_score(article: dict) -> dict:
     text = (article.get('title', '') + ' ' + article.get('summary', '')).lower()
-    high_kw, medium_kw, low_kw = _get_active_keywords()
 
-    high_hits   = sum(1 for kw in high_kw   if kw in text)
-    medium_hits = sum(1 for kw in medium_kw if kw in text)
-    low_hits    = sum(1 for kw in low_kw    if kw in text)
-    bull_hits   = sum(1 for kw in _BULL_KW  if kw in text)
-    bear_hits   = sum(1 for kw in _BEAR_KW  if kw in text)
+    high_hits   = sum(1 for kw in _BASE_HIGH   if kw in text)
+    medium_hits = sum(1 for kw in _BASE_MEDIUM if kw in text)
+    low_hits    = sum(1 for kw in _BASE_LOW    if kw in text)
+    bull_hits   = sum(1 for kw in _BULL_KW     if kw in text)
+    bear_hits   = sum(1 for kw in _BEAR_KW     if kw in text)
 
     if high_hits >= 2:
         relevance = 'HIGH';   impact = min(10, 5 + high_hits * 2)
@@ -112,74 +91,6 @@ def rule_score(article: dict) -> dict:
     return {'relevance': relevance, 'sentiment': sentiment, 'impact_score': impact, 'catalyst_type': catalyst}
 
 
-# ── Keyword refresh ───────────────────────────────────────────────────────
-
-async def refresh_keywords(force: bool = False) -> None:
-    groq_key = config.get('groq_key', '')
-    if not groq_key:
-        logger.warning('[feed] No Groq key — skipping keyword refresh.')
-        return
-
-    if not force:
-        kw = db.get_latest_keywords()
-        if kw and kw.get('generated_at'):
-            try:
-                age = (datetime.now(timezone.utc) - datetime.fromisoformat(
-                    kw['generated_at'].replace('Z', '+00:00'))).total_seconds()
-                if age < 21600:
-                    logger.info(f'[feed] Keywords fresh ({int(age/3600)}h old), skipping.')
-                    return
-            except Exception:
-                pass
-
-    logger.info(f'[feed] Requesting keyword refresh (force={force})...')
-    _emit_status('ai: Generating market-aware filter keywords...')
-
-    prompt = """You are a financial news filter for a US equity day trader.
-Based on CURRENT macro market conditions, generate keyword lists for filtering financial news headlines.
-Return ONLY this JSON, no markdown:
-{
-  "high": ["keyword1","keyword2",...],
-  "medium": ["keyword1","keyword2",...],
-  "low": ["keyword1","keyword2",...],
-  "context_note": "one sentence describing current market regime"
-}
-HIGH = 25-30 keywords/phrases that indicate genuinely market-moving events for US equities right now.
-MEDIUM = 25-30 keywords for relevant but non-urgent news.
-LOW = 15-20 keywords for marginally relevant news worth tracking."""
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(
-                'https://api.groq.com/openai/v1/chat/completions',
-                headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
-                json={
-                    'model': 'llama-3.3-70b-versatile',
-                    'messages': [{'role': 'user', 'content': prompt}],
-                    'temperature': 0.3,
-                    'max_tokens': 1024,
-                }
-            )
-            r.raise_for_status()
-            text = r.json()['choices'][0]['message']['content'].strip()
-            if text.startswith('```'):
-                text = re.sub(r'^```[a-z]*\n?', '', text)
-                text = re.sub(r'```$', '', text).strip()
-            parsed = json.loads(text)
-            db.save_keywords(
-                parsed.get('high', []),
-                parsed.get('medium', []),
-                parsed.get('low', []),
-                parsed.get('context_note', ''),
-            )
-            _cached_kw['_loaded_at'] = None
-            _emit_status('done: Filter keywords updated — AI context applied')
-            logger.info('[feed] Keywords refreshed from Groq.')
-    except Exception as e:
-        _emit_status('idle: Keyword refresh failed — using base keywords')
-        logger.error(f'[feed] Keyword refresh error: {e}')
-
-
 # ── SSE helpers ──────────────────────────────────────────────────────────────
 
 def _emit_status(msg: str):
@@ -193,6 +104,7 @@ def _emit_status(msg: str):
 
 
 def _emit_raw(article: dict):
+    import json
     payload = json.dumps({
         'id':           article.get('id', ''),
         'title':        article.get('title', ''),
@@ -210,65 +122,7 @@ def _emit_raw(article: dict):
         except: pass
 
 
-# ── Groq enrichment ──────────────────────────────────────────────────────────
-
-async def groq_filter_batch(batch: list) -> list:
-    if not batch:
-        return []
-    groq_key = config.get('groq_key', '')
-    if not groq_key:
-        return []
-
-    headlines_json = json.dumps([{'id': a['id'], 'title': a['title'], 'source': a['source']} for a in batch])
-    prompt = f"""You are filtering financial news for a US equity day trader.
-For EACH headline return a JSON array. Each element:
-- "id": exact id string
-- "relevance": "HIGH" | "MEDIUM" | "LOW" | "IGNORE"
-- "tickers": array of affected US stock symbols e.g. ["SPY","NVDA"]
-- "sentiment": "Bullish" | "Bearish" | "Neutral"
-- "impact_score": integer 1-10
-- "catalyst_type": "Earnings"|"Fed"|"Macro"|"Analyst"|"M&A"|"Regulatory"|"Geopolitical"|"Other"
-- "summary": one trader-focused sentence (empty string if IGNORE or LOW)
-
-Input:
-{headlines_json}
-
-Return ONLY a valid JSON array. No markdown."""
-
-    backoff = [5, 15, 30]
-    async with _groq_sem:
-        for attempt, delay in enumerate(backoff + [None]):
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    r = await client.post(
-                        'https://api.groq.com/openai/v1/chat/completions',
-                        headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
-                        json={'model': 'llama-3.1-8b-instant', 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.1, 'max_tokens': 1536}
-                    )
-                if r.status_code == 429:
-                    if delay:
-                        logger.warning(f'[feed] Groq 429, retrying in {delay}s...')
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        return []
-                r.raise_for_status()
-                text = r.json()['choices'][0]['message']['content'].strip()
-                if text.startswith('```'):
-                    text = re.sub(r'^```[a-z]*\n?', '', text)
-                    text = re.sub(r'```$', '', text).strip()
-                return json.loads(text)
-            except Exception as e:
-                if delay:
-                    logger.warning(f'[feed] Groq error ({e}), retrying in {delay}s...')
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f'[feed] Groq failed: {e}')
-                    return []
-    return []
-
-
-# ── Source fetchers (Finnhub only) ──────────────────────────────────────────────
+# ── Source fetchers ──────────────────────────────────────────────────────────
 
 def _make_id(title):
     return hashlib.sha256(title.lower().strip().encode()).hexdigest()[:24]
@@ -309,14 +163,11 @@ async def _fetch_finnhub_company(key, ticker):
         logger.warning(f'[feed] Finnhub {ticker}: {e}'); return []
 
 
-async def _empty_list(): return []
-
-
 # ── Main ingest ──────────────────────────────────────────────────────────────
 
 async def ingest_all_sources() -> None:
+    import json
     finnhub_key = config.get('finnhub_key', '')
-    groq_key    = config.get('groq_key', '')
 
     if not finnhub_key:
         _emit_status('idle: No Finnhub key — skipping ingest')
@@ -332,13 +183,11 @@ async def ingest_all_sources() -> None:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
 
-    existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
-    new_articles = [a for a in all_articles if a['id'] not in existing_ids]
-
-    # Always stream ALL fetched articles to the raw panel (not just new ones)
-    # so the raw panel is populated even when everything is already in DB
     for article in all_articles:
         _emit_raw(article)
+
+    existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
+    new_articles = [a for a in all_articles if a['id'] not in existing_ids]
 
     if not new_articles:
         _emit_status('idle: Feed up to date — no new articles')
@@ -347,26 +196,6 @@ async def ingest_all_sources() -> None:
     _emit_status(f'scoring: Rule-scoring {len(new_articles)} new articles...')
     for article in new_articles:
         article.update(rule_score(article))
-
-    if groq_key:
-        to_enrich = [a for a in new_articles if a['relevance'] != 'IGNORE']
-        if to_enrich:
-            batch = to_enrich[:15]
-            _emit_status(f'ai: Groq enriching {len(batch)} articles...')
-            groq_results = await groq_filter_batch(batch)
-            groq_map = {g['id']: g for g in groq_results if isinstance(g, dict)}
-            enriched = 0
-            for article in batch:
-                if article['id'] in groq_map:
-                    g = groq_map[article['id']]
-                    article['relevance']     = g.get('relevance',     article['relevance'])
-                    article['tickers']       = json.dumps(g.get('tickers', []))
-                    article['sentiment']     = g.get('sentiment',     article['sentiment'])
-                    article['impact_score']  = g.get('impact_score',  article['impact_score'])
-                    article['catalyst_type'] = g.get('catalyst_type', article['catalyst_type'])
-                    article['summary']       = g.get('summary', '')
-                    enriched += 1
-            _emit_status(f'ai: Enriched {enriched}/{len(batch)} articles')
 
     saved = 0
     for article in new_articles:
@@ -428,32 +257,6 @@ async def get_all(limit: int = 200, relevance: Optional[str] = None,
                   ticker: Optional[str] = None):
     return db.get_latest_articles(limit=limit, relevance_filter=relevance,
                                    sentiment_filter=sentiment, catalyst_filter=catalyst, ticker_filter=ticker)
-
-
-@router.get('/keyword-status')
-async def keyword_status():
-    kw = db.get_latest_keywords()
-    if not kw:
-        return {'generated_at': None, 'next_at': None, 'high_count': 0, 'medium_count': 0, 'low_count': 0, 'context_note': None}
-    try:
-        gen = datetime.fromisoformat(kw['generated_at'].replace('Z', '+00:00'))
-        next_at = (gen + timedelta(hours=6)).isoformat()
-    except Exception:
-        next_at = None
-    return {
-        'generated_at': kw['generated_at'],
-        'next_at':      next_at,
-        'high_count':   len(kw['high_kw']),
-        'medium_count': len(kw['medium_kw']),
-        'low_count':    len(kw['low_kw']),
-        'context_note': kw['context_note'],
-    }
-
-
-@router.post('/refresh-keywords')
-async def trigger_refresh_keywords():
-    asyncio.create_task(refresh_keywords(force=True))
-    return {'status': 'generating'}
 
 
 @router.get('/ingest-status')

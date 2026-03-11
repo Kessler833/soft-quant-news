@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from data import db
-from backend.api import health, feed, analysis, watchlist, prices, calendar, ai_routes, polymarket, websocket
+from backend.api import health, feed, analysis, watchlist, prices, calendar, polymarket, websocket
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,29 +19,19 @@ async def lifespan(application: FastAPI):
     db.init_db()
     logger.info('[main] Database initialised.')
 
-    from backend.api.feed import ingest_all_sources, refresh_keywords
+    from backend.api.feed import ingest_all_sources
     from backend.api.polymarket import update_polymarket
-    from backend.api.analysis import generate_macro_narrative
-    from backend.api.ai_routes import generate_premarket_brief
 
-    # Scheduler jobs — keyword refresh uses force=False (respects 6h age)
-    scheduler.add_job(ingest_all_sources,      'interval', seconds=60,   id='ingest')
-    scheduler.add_job(update_polymarket,        'interval', seconds=300,  id='polymarket')
-    scheduler.add_job(generate_macro_narrative, 'interval', seconds=1800, id='macro_narrative')
-    scheduler.add_job(refresh_keywords,         'interval', hours=6,      id='keyword_refresh', kwargs={'force': False})
-    scheduler.add_job(generate_premarket_brief, 'cron', hour=7, minute=0, timezone='UTC', id='premarket_brief')
+    scheduler.add_job(ingest_all_sources, 'interval', seconds=60,  id='ingest_all_sources')
+    scheduler.add_job(update_polymarket,  'interval', seconds=300, id='update_polymarket')
     scheduler.start()
     logger.info('[main] Scheduler started.')
 
     import asyncio
     async def _startup_tasks():
-        """Startup tasks that do NOT require API keys."""
-        logger.info('[main] Running startup tasks (no-key phase)...')
+        logger.info('[main] Running startup tasks...')
         try: await update_polymarket()
         except Exception as e: logger.warning(f'[main] Startup polymarket: {e}')
-
-        try: await generate_macro_narrative()
-        except Exception as e: logger.warning(f'[main] Startup macro: {e}')
 
     asyncio.create_task(_startup_tasks())
     yield
@@ -59,6 +49,5 @@ app.include_router(analysis.router,   prefix='/api/analysis')
 app.include_router(watchlist.router,  prefix='/api/watchlist')
 app.include_router(prices.router,     prefix='/api/prices')
 app.include_router(calendar.router,   prefix='/api/calendar')
-app.include_router(ai_routes.router,  prefix='/api/ai')
 app.include_router(polymarket.router, prefix='/api/polymarket')
 app.include_router(websocket.router)
