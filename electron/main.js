@@ -1,17 +1,17 @@
 const { app, BrowserWindow, ipcMain } = require('electron')
 const { spawn } = require('child_process')
-const path = require('path')
-const http = require('http')
+const path  = require('path')
+const http  = require('http')
 
 const { runSetup }   = require('./setup-window')
 const { stopOllama } = require('./ollama-manager')
 
-let mainWindow      = null
-let fastApiProcess  = null
-let _shuttingDown   = false
-let _mainWindowShown = false  // guard: don't quit while setup window is closing
+let mainWindow       = null
+let fastApiProcess   = null
+let _shuttingDown    = false
+let _mainWindowShown = false
 
-// ── Safe shutdown ────────────────────────────────────────────────────────────────
+// ── Safe shutdown ─────────────────────────────────────────────────────────────
 
 function safeShutdown(reason) {
   if (_shuttingDown) return
@@ -32,19 +32,14 @@ function safeShutdown(reason) {
 
 app.on('before-quit',       () => safeShutdown('before-quit'))
 app.on('window-all-closed', () => {
-  // Only quit if the main window has already been shown at least once.
-  // This prevents quitting when just the setup window closes.
-  if (_mainWindowShown) {
-    safeShutdown('window-all-closed')
-    app.quit()
-  }
+  if (_mainWindowShown) { safeShutdown('window-all-closed'); app.quit() }
 })
-process.on('SIGTERM',            () => { safeShutdown('SIGTERM');  process.exit(0) })
-process.on('SIGINT',             () => { safeShutdown('SIGINT');   process.exit(0) })
-process.on('uncaughtException',  err    => { console.error('[main] Uncaught:', err); safeShutdown('uncaughtException'); process.exit(1) })
-process.on('unhandledRejection', reason => { console.error('[main] Unhandled rejection:', reason) })
+process.on('SIGTERM',            () => { safeShutdown('SIGTERM');           process.exit(0) })
+process.on('SIGINT',             () => { safeShutdown('SIGINT');            process.exit(0) })
+process.on('uncaughtException',  err => { console.error('[main] Uncaught:', err); safeShutdown('uncaughtException'); process.exit(1) })
+process.on('unhandledRejection', r   => { console.error('[main] Unhandled rejection:', r) })
 
-// ── Backend ───────────────────────────────────────────────────────────────────────
+// ── Backend ───────────────────────────────────────────────────────────────────
 
 function startBackend() {
   const root       = path.join(__dirname, '..')
@@ -54,7 +49,7 @@ function startBackend() {
     ['-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', '8000'],
     { cwd: root, stdio: 'pipe' }
   )
-  fastApiProcess.stdout.on('data', d => console.log('[FastAPI]', d.toString().trim()))
+  fastApiProcess.stdout.on('data', d => console.log('[FastAPI]',     d.toString().trim()))
   fastApiProcess.stderr.on('data', d => console.error('[FastAPI ERR]', d.toString().trim()))
   fastApiProcess.on('exit', code => { console.log(`[FastAPI] exited ${code}`); fastApiProcess = null })
 }
@@ -76,7 +71,7 @@ function waitForBackend(retries = 40, delay = 500) {
   })
 }
 
-// ── Main window ────────────────────────────────────────────────────────────────────
+// ── Main window ────────────────────────────────────────────────────────────────
 
 async function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -89,29 +84,28 @@ async function createMainWindow() {
   })
   await mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'index.html'))
   mainWindow.show()
-  _mainWindowShown = true  // from now on, window-all-closed should quit the app
-  if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+  _mainWindowShown = true
+  if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev'))
     mainWindow.webContents.openDevTools()
-  }
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
-// ── Boot sequence ───────────────────────────────────────────────────────────────────
+// ── Boot sequence ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  // 1. Show setup window (installs Ollama if needed, skips instantly if already ready)
+  // 1. Ollama setup (installs + starts + pulls model if needed)
   await runSetup()
 
-  // 2. Start backend
+  // 2. Start Python backend
   startBackend()
 
-  // 3. Wait for backend, open main window
+  // 3. Wait for backend health check, then open main window
   try {
     await waitForBackend(40, 500)
     console.log('[main] Backend ready — opening window.')
     await createMainWindow()
   } catch (err) {
-    console.error('[main] Backend failed:', err.message)
+    console.error('[main] Backend failed to start:', err.message)
     safeShutdown('backend-timeout')
     app.quit()
   }

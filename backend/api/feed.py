@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -14,9 +15,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _status_queues: list = []
-_raw_queues: list = []
+_raw_queues:    list = []
 
-# ── Base hardcoded keywords (fallback) ───────────────────────────────────────
+# ── Relevance / sentiment keyword lists ──────────────────────────────────────
 
 _BASE_HIGH = [
     'fed ', 'federal reserve', 'fomc', 'rate cut', 'rate hike', 'interest rate',
@@ -56,6 +57,31 @@ _CATALYST_MAP = {
     'Geopolitical': ['war', 'sanction', 'tariff', 'trade', 'china', 'russia', 'iran', 'opec'],
 }
 
+# Regex to extract ticker symbols from headlines (e.g. (AAPL), $TSLA, NYSE:MSFT)
+_TICKER_RE = re.compile(
+    r'\b([A-Z]{1,5})\b(?=\s*[,)\]])|'
+    r'\(([A-Z]{1,5})\)|'
+    r'\$([A-Z]{1,5})\b|'
+    r'(?:NYSE|NASDAQ|AMEX|TSX):\s*([A-Z]{1,5})\b'
+)
+_TICKER_BLACKLIST = {
+    'A', 'AN', 'ARE', 'AS', 'AT', 'BE', 'BY', 'CAN', 'DO', 'FOR',
+    'HAS', 'HE', 'IF', 'IN', 'IS', 'IT', 'MY', 'NO', 'OF', 'ON',
+    'OR', 'SO', 'TO', 'UP', 'US', 'WE',
+    'CEO', 'CFO', 'COO', 'CTO', 'IPO', 'ETF', 'GDP', 'CPI', 'FED',
+    'SEC', 'DOJ', 'FTC', 'IMF', 'ECB', 'BOJ', 'PBOC', 'OPEC', 'PMI',
+    'EPS', 'NYSE', 'AMEX', 'SPY', 'QQQ',
+}
+
+
+def _extract_tickers(text: str) -> list:
+    found = set()
+    for m in _TICKER_RE.finditer(text):
+        ticker = next(t for t in m.groups() if t)
+        if ticker not in _TICKER_BLACKLIST:
+            found.add(ticker)
+    return sorted(found)
+
 
 def rule_score(article: dict) -> dict:
     text = (article.get('title', '') + ' ' + article.get('summary', '')).lower()
@@ -82,16 +108,26 @@ def rule_score(article: dict) -> dict:
         relevance = 'IGNORE'; impact = 1
 
     sentiment = 'Bullish' if bull_hits > bear_hits else ('Bearish' if bear_hits > bull_hits else 'Neutral')
-    catalyst = 'Other'
+    catalyst  = 'Other'
     for cat, keywords in _CATALYST_MAP.items():
         if any(kw in text for kw in keywords):
             catalyst = cat
             break
 
-    return {'relevance': relevance, 'sentiment': sentiment, 'impact_score': impact, 'catalyst_type': catalyst}
+    # Extract tickers from the original (un-lowercased) title
+    import json as _json
+    tickers = _extract_tickers(article.get('title', '') + ' ' + article.get('summary', ''))
+
+    return {
+        'relevance': relevance,
+        'sentiment': sentiment,
+        'impact_score': impact,
+        'catalyst_type': catalyst,
+        'tickers': _json.dumps(tickers),
+    }
 
 
-# ── SSE helpers ──────────────────────────────────────────────────────────────
+# ── SSE helpers ───────────────────────────────────────────────────────────────
 
 def _emit_status(msg: str):
     dead = []
@@ -122,7 +158,7 @@ def _emit_raw(article: dict):
         except: pass
 
 
-# ── Source fetchers ──────────────────────────────────────────────────────────
+# ── Normalisation / ID ────────────────────────────────────────────────────────
 
 def _make_id(title):
     return hashlib.sha256(title.lower().strip().encode()).hexdigest()[:24]
@@ -138,16 +174,23 @@ def _normalize(title, source, url='', published_at=''):
     }
 
 
+# ── Finnhub fetchers ──────────────────────────────────────────────────────────
+
 async def _fetch_finnhub_general(key):
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f'https://finnhub.io/api/v1/news?category=general&token={key}')
             r.raise_for_status()
-            return [_normalize(i.get('headline',''), 'Finnhub', i.get('url',''),
-                    datetime.fromtimestamp(i.get('datetime',0), tz=timezone.utc).isoformat())
-                    for i in r.json() if i.get('headline')]
+            return [
+                _normalize(
+                    i.get('headline', ''), 'Finnhub', i.get('url', ''),
+                    datetime.fromtimestamp(i.get('datetime', 0), tz=timezone.utc).isoformat()
+                )
+                for i in r.json() if i.get('headline')
+            ]
     except Exception as e:
-        logger.warning(f'[feed] Finnhub general: {e}'); return []
+        logger.warning(f'[feed] Finnhub general: {e}')
+        return []
 
 
 async def _fetch_finnhub_company(key, ticker):
@@ -156,71 +199,33 @@ async def _fetch_finnhub_company(key, ticker):
     yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f'https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}&token={key}')
+            r = await client.get(
+                f'https://finnhub.io/api/v1/company-news'
+                f'?symbol={ticker}&from={yesterday}&to={today}&token={key}'
+            )
             r.raise_for_status()
-            return [_normalize(i.get('headline',''), f'Finnhub/{ticker}', i.get('url',''),
-                    datetime.fromtimestamp(i.get('datetime',0), tz=timezone.utc).isoformat())
-                    for i in r.json() if i.get('headline')]
+            return [
+                _normalize(
+                    i.get('headline', ''), f'Finnhub/{ticker}', i.get('url', ''),
+                    datetime.fromtimestamp(i.get('datetime', 0), tz=timezone.utc).isoformat()
+                )
+                for i in r.json() if i.get('headline')
+            ]
     except Exception as e:
-        logger.warning(f'[feed] Finnhub {ticker}: {e}'); return []
+        logger.warning(f'[feed] Finnhub {ticker}: {e}')
+        return []
 
 
-# ── Main ingest ──────────────────────────────────────────────────────────────
+# ── Price drift tracking ──────────────────────────────────────────────────────
 
-async def ingest_all_sources() -> None:
-    import json
-    finnhub_key = config.get('finnhub_key', '')
-
-    if not finnhub_key:
-        _emit_status('idle: No Finnhub key — skipping ingest')
-        return
-
-    _emit_status('fetching: Collecting articles from Finnhub...')
-
-    watchlist_tickers = db.get_watchlist()
-    tasks = [_fetch_finnhub_general(finnhub_key)]
-    for t in watchlist_tickers:
-        tasks.append(_fetch_finnhub_company(finnhub_key, t))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    all_articles = [a for r in results if isinstance(r, list) for a in r]
-
-    existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
-    new_articles = [a for a in all_articles if a['id'] not in existing_ids]
-
-    if not new_articles:
-        _emit_status('idle: Feed up to date — no new articles')
-        return
-
-    _emit_status(f'scoring: Rule-scoring {len(new_articles)} new articles...')
-    for article in new_articles:
-        article.update(rule_score(article))
-
-    # Emit raw AFTER scoring so the raw panel shows correct relevance
-    for article in new_articles:
-        _emit_raw(article)
-
-    saved = 0
-    for article in new_articles:
-        db.save_article(article)
-        saved += 1
-        if article.get('relevance') in ('HIGH', 'MEDIUM'):
-            from backend.api import websocket as ws_module
-            await ws_module.broadcast(article)
-        if article.get('relevance') == 'HIGH':
-            tickers = json.loads(article.get('tickers', '[]'))
-            for ticker in tickers[:3]:
-                _schedule_drift(article['id'], ticker)
-
-    high_n = len([a for a in new_articles if a['relevance'] == 'HIGH'])
-    med_n  = len([a for a in new_articles if a['relevance'] == 'MEDIUM'])
-    low_n  = len([a for a in new_articles if a['relevance'] == 'LOW'])
-    _emit_status(f'done: {saved} saved — {high_n} HIGH · {med_n} MEDIUM · {low_n} LOW')
-
-
-def _schedule_drift(article_id, ticker):
+def _schedule_drift(article_id: str, ticker: str) -> None:
+    """Schedule 3 price-drift snapshots without importing from backend.main."""
     try:
-        from backend.main import scheduler
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        # Retrieve the running scheduler that main.py started
+        import backend.main as _main_mod
+        scheduler = _main_mod.scheduler
+
         now = datetime.now(timezone.utc)
         for minutes in [5, 15, 30]:
             run_at = now + timedelta(minutes=minutes)
@@ -232,12 +237,12 @@ def _schedule_drift(article_id, ticker):
                 replace_existing=True,
                 misfire_grace_time=60,
             )
-        logger.info(f'[feed] Drift jobs scheduled: {ticker} at +5m/+15m/+30m (article {article_id[:8]})')
+        logger.info(f'[feed] Drift jobs scheduled: {ticker} +5/+15/+30m (article {article_id[:8]})')
     except Exception as e:
         logger.warning(f'[feed] Drift schedule: {e}')
 
 
-async def _track_drift(article_id, ticker, minutes):
+async def _track_drift(article_id: str, ticker: str, minutes: int) -> None:
     try:
         from backend.api.prices import get_quote_price
         price = await get_quote_price(ticker)
@@ -245,69 +250,60 @@ async def _track_drift(article_id, ticker, minutes):
             db.save_drift(article_id, ticker, minutes, price)
             logger.info(f'[feed] Drift tracked: {ticker} +{minutes}m = {price}')
         else:
-            logger.warning(f'[feed] Drift track: no price returned for {ticker} +{minutes}m')
+            logger.warning(f'[feed] Drift track: no price for {ticker} +{minutes}m')
     except Exception as e:
         logger.warning(f'[feed] Drift track: {e}')
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# ── Main ingest ───────────────────────────────────────────────────────────────
 
-@router.get('/latest')
-async def get_latest(limit: int = 50, relevance: Optional[str] = None,
-                     sentiment: Optional[str] = None, catalyst: Optional[str] = None,
-                     ticker: Optional[str] = None):
-    return db.get_latest_articles(limit=limit, relevance_filter=relevance,
-                                   sentiment_filter=sentiment, catalyst_filter=catalyst, ticker_filter=ticker)
+async def ingest_all_sources() -> None:
+    import json
+    finnhub_key = config.get('finnhub_key', '')
 
+    if not finnhub_key:
+        _emit_status('idle: No Finnhub API key — add it in Settings')
+        return
 
-@router.get('/ticker/{symbol}')
-async def get_ticker_feed(symbol: str):
-    return db.get_articles_for_ticker(symbol.upper())
+    _emit_status('fetching: Collecting articles from Finnhub…')
 
+    watchlist_tickers = db.get_watchlist()
+    tasks = [_fetch_finnhub_general(finnhub_key)]
+    for t in watchlist_tickers:
+        tasks.append(_fetch_finnhub_company(finnhub_key, t))
 
-@router.get('/all')
-async def get_all(limit: int = 200, relevance: Optional[str] = None,
-                  sentiment: Optional[str] = None, catalyst: Optional[str] = None,
-                  ticker: Optional[str] = None):
-    return db.get_latest_articles(limit=limit, relevance_filter=relevance,
-                                   sentiment_filter=sentiment, catalyst_filter=catalyst, ticker_filter=ticker)
+    results     = await asyncio.gather(*tasks, return_exceptions=True)
+    all_articles = [a for r in results if isinstance(r, list) for a in r]
 
+    existing_ids  = {a['id'] for a in db.get_latest_articles(limit=500)}
+    new_articles  = [a for a in all_articles if a['id'] not in existing_ids]
 
-@router.get('/ingest-status')
-async def ingest_status_stream():
-    q = asyncio.Queue(maxsize=50)
-    _status_queues.append(q)
-    async def gen():
-        try:
-            while True:
-                try:
-                    msg = await asyncio.wait_for(q.get(), timeout=25)
-                    yield f'data: {msg}\n\n'
-                except asyncio.TimeoutError:
-                    yield 'data: ping\n\n'
-        except asyncio.CancelledError:
-            pass
-        finally:
-            try: _status_queues.remove(q)
-            except: pass
-    return StreamingResponse(gen(), media_type='text/event-stream', headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
+    if not new_articles:
+        _emit_status('idle: Feed up to date — no new articles')
+        return
 
+    _emit_status(f'scoring: Rule-scoring {len(new_articles)} new articles…')
+    for article in new_articles:
+        article.update(rule_score(article))
 
-@router.get('/raw-stream')
-async def raw_stream():
-    q = asyncio.Queue(maxsize=200)
-    _raw_queues.append(q)
-    async def gen():
-        try:
-            while True:
-                try:
-                    msg = await asyncio.wait_for(q.get(), timeout=25)
-                    yield f'data: {msg}\n\n'
-                except asyncio.TimeoutError:
-                    yield 'data: ping\n\n'
-        except asyncio.CancelledError:
-            pass
-        finally:
-            try: _raw_queues.remove(q)
-            except: pass
-    return StreamingResponse(gen(), media_type='text/event-stream', headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
+    for article in new_articles:
+        _emit_raw(article)
+
+    saved = 0
+    for article in new_articles:
+        db.save_article(article)
+        saved += 1
+
+        if article.get('relevance') in ('HIGH', 'MEDIUM'):
+            from backend.api import websocket as ws_module
+            await ws_module.broadcast(article)
+
+        if article.get('relevance') == 'HIGH':
+            tickers = json.loads(article.get('tickers', '[]'))
+            for ticker in tickers[:3]:
+                _schedule_drift(article['id'], ticker)
+
+    high_n = sum(1 for a in new_articles if a['relevance'] == 'HIGH')
+    med_n  = sum(1 for a in new_articles if a['relevance'] == 'MEDIUM')
+    low_n  = sum(1 for a in new_articles if a['relevance'] == 'LOW')
+    _emit_status(f'done: {saved} saved — {high_n} HIGH · {med_n} MEDIUM · {low_n} LOW')

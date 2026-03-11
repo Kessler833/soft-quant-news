@@ -1,5 +1,6 @@
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 import httpx
@@ -11,7 +12,7 @@ from data import config, db
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_OFFLINE_MSG = 'Ollama offline — start Ollama and set model in Synchro.'
+_OFFLINE_MSG = 'Ollama offline — make sure Ollama is running and a model is set in Settings.'
 
 
 def _ollama_url() -> str:
@@ -19,18 +20,71 @@ def _ollama_url() -> str:
 
 
 def _ollama_model() -> str:
-    return config.get('ollama_model', 'llama3')
+    return config.get('ollama_model', 'gemma3:4b')
 
 
-async def _ollama_generate(prompt: str) -> str:
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(
-            _ollama_url() + '/api/generate',
-            json={'model': _ollama_model(), 'prompt': prompt, 'stream': False},
-        )
-        r.raise_for_status()
-        return r.json().get('response', '')
+# ── Warm-up / readiness check ─────────────────────────────────────────────────
 
+async def _ollama_ready(timeout: int = 5) -> bool:
+    """Return True if Ollama is reachable and has at least one model loaded."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(_ollama_url() + '/api/tags')
+            if r.status_code != 200:
+                return False
+            models = r.json().get('models', [])
+            return len(models) > 0
+    except Exception:
+        return False
+
+
+async def _ensure_ollama_ready(retries: int = 3, delay: float = 2.0) -> bool:
+    """Try a few times before giving up — Ollama may still be loading."""
+    for _ in range(retries):
+        if await _ollama_ready():
+            return True
+        await asyncio.sleep(delay)
+    return False
+
+
+# ── Core generate call with retry ─────────────────────────────────────────────
+
+async def _ollama_generate(prompt: str, retries: int = 2) -> str:
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                r = await client.post(
+                    _ollama_url() + '/api/generate',
+                    json={'model': _ollama_model(), 'prompt': prompt, 'stream': False},
+                )
+                r.raise_for_status()
+                return r.json().get('response', '')
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                await asyncio.sleep(3)
+    raise last_err
+
+
+# ── JSON fence stripping ──────────────────────────────────────────────────────
+
+def _strip_fences(text: str) -> str:
+    """Strip markdown code fences and return the raw JSON string."""
+    text = text.strip()
+    # Remove opening fence (```json or ```)
+    if text.startswith('```'):
+        text = text[3:]
+        if text.startswith('json'):
+            text = text[4:]
+        text = text.lstrip('\n')
+    # Remove closing fence
+    if text.endswith('```'):
+        text = text[:-3]
+    return text.strip()
+
+
+# ── Cache helpers ─────────────────────────────────────────────────────────────
 
 def _cache_fresh(key: str, max_age_minutes: int) -> dict | None:
     raw = db.get_ai_cache(key)
@@ -38,7 +92,7 @@ def _cache_fresh(key: str, max_age_minutes: int) -> dict | None:
         return None
     try:
         data = json.loads(raw)
-        gen = data.get('generated_at')
+        gen  = data.get('generated_at')
         if not gen:
             return None
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(gen)).total_seconds() / 60
@@ -50,22 +104,33 @@ def _cache_fresh(key: str, max_age_minutes: int) -> dict | None:
 def _article_lines(articles: list, limit: int = 20) -> str:
     lines = []
     for a in articles[:limit]:
-        rel  = a.get('relevance', 'LOW')
-        sent = a.get('sentiment', 'Neutral')
+        rel   = a.get('relevance', 'LOW')
+        sent  = a.get('sentiment', 'Neutral')
         title = a.get('title', '')
         lines.append(f'[{rel}][{sent}] {title}')
     return '\n'.join(lines)
 
 
-# ── GET /premarket-brief ─────────────────────────────────────────────────
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ── GET /premarket-brief ──────────────────────────────────────────────────────
 
 async def _build_premarket_brief() -> dict:
+    if not await _ensure_ollama_ready():
+        return {
+            'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
+            'market_bias': 'Neutral', 'bias_rationale': _OFFLINE_MSG,
+            'tickers_to_watch': [], 'generated_at': _now_iso(), 'error': _OFFLINE_MSG,
+        }
+
     articles = db.get_articles_since(hours=4)
     if not articles:
         return {
             'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
             'market_bias': 'Neutral', 'bias_rationale': 'No recent articles available.',
-            'tickers_to_watch': [], 'generated_at': datetime.now(timezone.utc).isoformat(),
+            'tickers_to_watch': [], 'generated_at': _now_iso(),
         }
 
     context = _article_lines(articles, limit=30)
@@ -89,15 +154,9 @@ Respond ONLY with valid JSON matching this exact schema (no markdown, no explana
 }}"""
 
     try:
-        text = await _ollama_generate(prompt)
-        # Strip possible markdown fences
-        text = text.strip()
-        if text.startswith('```'):
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
+        text = _strip_fences(await _ollama_generate(prompt))
         data = json.loads(text)
-        data['generated_at'] = datetime.now(timezone.utc).isoformat()
+        data['generated_at'] = _now_iso()
         db.set_ai_cache('premarket-brief', json.dumps(data))
         return data
     except Exception as e:
@@ -105,8 +164,7 @@ Respond ONLY with valid JSON matching this exact schema (no markdown, no explana
         return {
             'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
             'market_bias': 'Neutral', 'bias_rationale': _OFFLINE_MSG,
-            'tickers_to_watch': [], 'generated_at': datetime.now(timezone.utc).isoformat(),
-            'error': _OFFLINE_MSG,
+            'tickers_to_watch': [], 'generated_at': _now_iso(), 'error': str(e),
         }
 
 
@@ -123,7 +181,7 @@ async def post_premarket_brief():
     return await _build_premarket_brief()
 
 
-# ── GET /macro-narrative ─────────────────────────────────────────────────
+# ── GET /macro-narrative ──────────────────────────────────────────────────────
 
 @router.get('/macro-narrative')
 async def get_macro_narrative():
@@ -131,9 +189,12 @@ async def get_macro_narrative():
     if cached:
         return cached
 
+    if not await _ensure_ollama_ready():
+        return {'narrative': _OFFLINE_MSG, 'regime': 'NEUTRAL', 'generated_at': _now_iso(), 'error': _OFFLINE_MSG}
+
     articles = db.get_articles_since(hours=8)
     if not articles:
-        return {'narrative': 'No recent data.', 'regime': 'NEUTRAL', 'generated_at': datetime.now(timezone.utc).isoformat()}
+        return {'narrative': 'No recent data.', 'regime': 'NEUTRAL', 'generated_at': _now_iso()}
 
     context = _article_lines(articles, limit=40)
     prompt = f"""You are a macro strategist. Based on the recent news below, determine the current macro regime.
@@ -148,23 +209,17 @@ Respond ONLY with valid JSON (no markdown):
 }}"""
 
     try:
-        text = await _ollama_generate(prompt)
-        text = text.strip()
-        if text.startswith('```'):
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
+        text = _strip_fences(await _ollama_generate(prompt))
         data = json.loads(text)
-        data['generated_at'] = datetime.now(timezone.utc).isoformat()
+        data['generated_at'] = _now_iso()
         db.set_ai_cache('macro-narrative', json.dumps(data))
         return data
     except Exception as e:
         logger.warning(f'[ai] macro-narrative error: {e}')
-        return {'narrative': _OFFLINE_MSG, 'regime': 'NEUTRAL',
-                'generated_at': datetime.now(timezone.utc).isoformat(), 'error': _OFFLINE_MSG}
+        return {'narrative': _OFFLINE_MSG, 'regime': 'NEUTRAL', 'generated_at': _now_iso(), 'error': str(e)}
 
 
-# ── POST /chat ──────────────────────────────────────────────────────────────
+# ── POST /chat ────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     question: str
@@ -173,8 +228,11 @@ class ChatRequest(BaseModel):
 
 @router.post('/chat')
 async def ai_chat(body: ChatRequest):
+    if not await _ensure_ollama_ready():
+        return {'answer': _OFFLINE_MSG, 'sources_used': 0, 'error': _OFFLINE_MSG}
+
     articles = db.get_articles_since(hours=body.context_hours)
-    context = _article_lines(articles, limit=20)
+    context  = _article_lines(articles, limit=20)
     sources_used = min(len(articles), 20)
 
     if not articles:
@@ -194,10 +252,10 @@ Answer:"""
         return {'answer': answer.strip(), 'sources_used': sources_used}
     except Exception as e:
         logger.warning(f'[ai] chat error: {e}')
-        return {'answer': _OFFLINE_MSG, 'sources_used': 0, 'error': _OFFLINE_MSG}
+        return {'answer': _OFFLINE_MSG, 'sources_used': 0, 'error': str(e)}
 
 
-# ── POST /bull-bear ──────────────────────────────────────────────────────────
+# ── POST /bull-bear ───────────────────────────────────────────────────────────
 
 class BullBearRequest(BaseModel):
     ticker: str
@@ -206,8 +264,14 @@ class BullBearRequest(BaseModel):
 @router.post('/bull-bear')
 async def ai_bull_bear(body: BullBearRequest):
     ticker = body.ticker.upper()
-    articles = db.get_articles_for_ticker(ticker)
 
+    if not await _ensure_ollama_ready():
+        return {
+            'ticker': ticker, 'bull_case': [], 'bear_case': [],
+            'overall_lean': 'Neutral', 'confidence': 'Low', 'error': _OFFLINE_MSG,
+        }
+
+    articles = db.get_articles_for_ticker(ticker)
     if not articles:
         return {
             'ticker': ticker, 'bull_case': [], 'bear_case': [],
@@ -230,12 +294,7 @@ Respond ONLY with valid JSON (no markdown):
 }}"""
 
     try:
-        text = await _ollama_generate(prompt)
-        text = text.strip()
-        if text.startswith('```'):
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
+        text = _strip_fences(await _ollama_generate(prompt))
         data = json.loads(text)
         data['ticker'] = ticker
         return data
@@ -243,5 +302,5 @@ Respond ONLY with valid JSON (no markdown):
         logger.warning(f'[ai] bull-bear error: {e}')
         return {
             'ticker': ticker, 'bull_case': [], 'bear_case': [],
-            'overall_lean': 'Neutral', 'confidence': 'Low', 'error': _OFFLINE_MSG,
+            'overall_lean': 'Neutral', 'confidence': 'Low', 'error': str(e),
         }
