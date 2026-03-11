@@ -215,3 +215,12 @@
   height: 10px;
   border-width: 1px;
 }
+
+/* ── Activity Log ── */
+#feed-activity-log.collapsed { max-height: 0 !important; }
+#feed-activity-log:not(.collapsed) { max-height: 180px; }
+#feed-activity-bar:hover { background: var(--bg-tertiary); }
+.activity-entry { display: flex; gap: 8px; }
+.activity-entry .activity-time { color: var(--text-muted); flex-shrink: 0; }
+.activity-entry .activity-msg { color: var(--text-primary); }
+.activity-entry .activity-est { color: var(--accent-orange); flex-shrink: 0; margin-left: auto; }

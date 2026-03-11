@@ -277,6 +277,23 @@ def get_polymarket_alerts(threshold: float = 0.05) -> list:
     return [m for m in markets if m['prev_probability'] is not None and abs(m['probability'] - m['prev_probability']) > threshold]
 
 
+def reset_article_cache() -> None:
+    """Clear articles, AI cache, drift tracking, keyword cache, and polymarket data.
+    Preserves watchlist and API keys."""
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.executescript("""
+            DELETE FROM articles;
+            DELETE FROM ai_cache;
+            DELETE FROM drift_tracking;
+            DELETE FROM keyword_cache;
+            DELETE FROM polymarket_markets;
+        """)
+        conn.commit()
+        conn.close()
+
+
 def get_latest_keywords():
     conn = get_conn()
     cur = conn.cursor()

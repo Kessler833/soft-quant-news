@@ -1,3 +1,17 @@
+<style>
+  .step-dot {
+    width:22px; height:22px; border-radius:50%;
+    border:2px solid var(--border);
+    display:flex; align-items:center; justify-content:center;
+    font-size:10px; font-weight:700; color:var(--text-muted);
+    transition:all 0.3s;
+  }
+  .step-dot.active  { border-color:var(--accent-blue);  color:var(--accent-blue); }
+  .step-dot.done    { border-color:var(--accent-green); color:var(--accent-green); background:rgba(63,185,80,.12); }
+  .step-connector   { width:24px; height:2px; background:var(--border); border-radius:2px; transition:background 0.3s; }
+  .step-connector.done { background:var(--accent-green); }
+</style>
+
 <div id="synchro-wrap" style="overflow-y:auto;height:100%;padding:20px 24px;">
   <div style="max-width:680px;margin:0 auto;">
 
@@ -10,7 +24,7 @@
     <!-- System Status -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">System Status</div>
-      <div id="synchro-status-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+      <div id="synchro-status-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;"></div>
       <button id="synchro-check-btn" class="synchro-btn" style="margin-top:10px;">&#8635; Re-check All</button>
     </div>
 
@@ -24,10 +38,6 @@
       <div class="synchro-field-group">
         <label class="synchro-label">Alpaca Secret</label>
         <input id="key-alpaca-secret" class="synchro-input" type="password" placeholder="&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;"/>
-      </div>
-      <div class="synchro-field-group">
-        <label class="synchro-label">Groq API Key <span style="font-size:10px;color:var(--text-muted);">(free at console.groq.com &mdash; 1000 req/day, 30 RPM)</span></label>
-        <input id="key-groq" class="synchro-input" type="password" placeholder="gsk_..."/>
       </div>
       <div class="synchro-field-group">
         <label class="synchro-label">Finnhub Key <span style="font-size:10px;color:var(--text-muted);">(free &mdash; 60 req/min)</span></label>
@@ -48,14 +58,56 @@
       <div id="synchro-save-msg" style="margin-top:8px;"></div>
     </div>
 
+    <!-- Local AI Engine -->
+    <div style="margin-bottom:24px;">
+      <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;">
+        Local AI Engine <span style="font-size:10px;color:var(--accent-green);" id="local-ai-badge">&#9679; Primary</span>
+      </div>
+
+      <!-- Ollama installer card — visible only while downloading / setting up -->
+      <div id="ollama-installer-card" style="display:none;background:var(--bg-panel);border:1px solid var(--border);border-left:3px solid var(--accent-blue);border-radius:6px;padding:14px 16px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-size:13px;font-weight:700;color:var(--accent-blue);">&#8595; Ollama Setup</span>
+          <span id="ollama-step-label" style="font-size:11px;color:var(--text-muted);">Initialising...</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">
+          <div class="step-dot" id="ollama-dot-1">1</div>
+          <div class="step-connector" id="ollama-conn-1"></div>
+          <div class="step-dot" id="ollama-dot-2">2</div>
+          <div class="step-connector" id="ollama-conn-2"></div>
+          <div class="step-dot" id="ollama-dot-3">3</div>
+        </div>
+        <div style="width:100%;height:5px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;margin-bottom:8px;">
+          <div id="ollama-progress-bar" style="height:100%;width:0%;background:var(--accent-blue);border-radius:3px;transition:width 0.2s;"></div>
+        </div>
+        <div id="ollama-status-text" style="font-size:11px;color:var(--text-muted);">Starting...</div>
+      </div>
+
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.6;">
+        All AI grading runs locally on your PC — zero cloud dependency. Ollama is downloaded and managed automatically.<br>
+        <strong style="color:var(--text-primary);">Recommended:</strong>
+        <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;font-size:11px;">qwen2.5:3b</code>
+        (~2GB, best JSON reliability) &middot;
+        <code style="background:var(--bg-tertiary);padding:1px 4px;border-radius:2px;font-size:11px;">qwen2.5:7b</code>
+        (~5GB, higher accuracy)
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Ollama URL</label>
+        <input id="key-local-llm-url" class="synchro-input" type="text" placeholder="http://localhost:11434"/>
+      </div>
+      <div class="synchro-field-group">
+        <label class="synchro-label">Model</label>
+        <input id="key-local-llm-model" class="synchro-input" type="text" placeholder="qwen2.5:3b"/>
+      </div>
+      <div id="local-ai-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
+    </div>
+
     <!-- Rate Limit Planner -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:6px;">&#9881; Rate Limit Planner</div>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
-        Calculates the optimal ingest interval for each API so your daily quota lasts the full active window &mdash; with a <strong style="color:var(--text-primary);">15% buffer</strong>.
+        Calculates the optimal ingest interval so your daily quota lasts the full active window with a <strong style="color:var(--text-primary);">15% buffer</strong>.
       </div>
-
-      <!-- Window controls -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
         <div class="synchro-field-group" style="margin-bottom:0;">
           <label class="synchro-label">Window &mdash; From</label>
@@ -70,10 +122,7 @@
           <label for="rate-always-on" style="font-size:12px;color:var(--text-primary);cursor:pointer;">Always on (24h)</label>
         </div>
       </div>
-
-      <!-- Per-API stat cards -->
       <div id="rate-all-results" style="display:flex;flex-direction:column;gap:10px;"></div>
-
       <button id="rate-apply-btn" class="synchro-btn synchro-btn--primary" style="margin-top:12px;">&#10003; Apply Schedule</button>
     </div>
 
@@ -96,8 +145,10 @@
     <!-- Danger Zone -->
     <div style="margin-bottom:24px;">
       <div class="panel-header" style="padding-left:0;border:none;margin-bottom:10px;color:var(--accent-red);">&#9888; Danger Zone</div>
-      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">Reset All Cached Settings</button>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears localStorage. Does not affect backend database.</div>
+      <button id="synchro-soft-reset-btn" class="synchro-btn synchro-btn--danger" style="margin-bottom:8px;">&#10119; Reset Article Cache</button>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">Clears all articles, AI cache, and keywords. Preserves watchlist and API keys.</div>
+      <button id="synchro-reset-cache-btn" class="synchro-btn synchro-btn--danger">&#9888; Full Reset (includes API keys)</button>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Clears ALL browser data including API keys. You will need to re-enter all keys.</div>
     </div>
 
   </div>
