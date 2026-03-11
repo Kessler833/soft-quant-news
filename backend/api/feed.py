@@ -151,10 +151,12 @@ async def _fetch_finnhub_general(key):
 
 
 async def _fetch_finnhub_company(key, ticker):
-    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    now   = datetime.now(timezone.utc)
+    today = now.strftime('%Y-%m-%d')
+    yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f'https://finnhub.io/api/v1/company-news?symbol={ticker}&from={today}&to={today}&token={key}')
+            r = await client.get(f'https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}&token={key}')
             r.raise_for_status()
             return [_normalize(i.get('headline',''), f'Finnhub/{ticker}', i.get('url',''),
                     datetime.fromtimestamp(i.get('datetime',0), tz=timezone.utc).isoformat())
@@ -183,9 +185,6 @@ async def ingest_all_sources() -> None:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
 
-    for article in all_articles:
-        _emit_raw(article)
-
     existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
     new_articles = [a for a in all_articles if a['id'] not in existing_ids]
 
@@ -196,6 +195,10 @@ async def ingest_all_sources() -> None:
     _emit_status(f'scoring: Rule-scoring {len(new_articles)} new articles...')
     for article in new_articles:
         article.update(rule_score(article))
+
+    # Emit raw AFTER scoring so the raw panel shows correct relevance
+    for article in new_articles:
+        _emit_raw(article)
 
     saved = 0
     for article in new_articles:
