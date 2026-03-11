@@ -116,11 +116,6 @@ def rule_score(article: dict) -> dict:
 # ── Keyword refresh ───────────────────────────────────────────────────────
 
 async def refresh_keywords(force: bool = False) -> None:
-    groq_key = config.get('groq_key', '')
-    if not groq_key:
-        logger.warning('[feed] No Groq key — skipping keyword refresh.')
-        return
-
     if not force:
         kw = db.get_latest_keywords()
         if kw and kw.get('generated_at'):
@@ -137,18 +132,21 @@ async def refresh_keywords(force: bool = False) -> None:
     _emit_status('ai: Generating market-aware filter keywords...')
     t0_kw = time.time()
 
-    prompt = """You are a financial news filter for a US equity day trader.
-Based on CURRENT macro market conditions, generate keyword lists for filtering financial news headlines.
-Return ONLY this JSON, no markdown:
-{
-  "high": ["keyword1","keyword2",...],
-  "medium": ["keyword1","keyword2",...],
-  "low": ["keyword1","keyword2",...],
-  "context_note": "one sentence describing current market regime"
-}
-HIGH = 25-30 keywords/phrases that indicate genuinely market-moving events for US equities right now.
-MEDIUM = 25-30 keywords for relevant but non-urgent news.
-LOW = 15-20 keywords for marginally relevant news worth tracking."""
+    # Try local AI first
+    from backend.api.local_ai import generate_keywords_local
+    success = await generate_keywords_local()
+    if success:
+        elapsed_kw = round(time.time() - t0_kw, 1)
+        _cached_kw['_loaded_at'] = None
+        _emit_status(f'done: Filter keywords updated locally in {elapsed_kw}s')
+        return
+
+    # Fall back to Groq
+    groq_key = config.get('groq_key', '')
+    if not groq_key:
+        _emit_status('idle: No AI available for keyword refresh — using base keywords')
+        logger.warning('[feed] No local LLM or Groq key — skipping keyword refresh.')
+        return
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -157,7 +155,18 @@ LOW = 15-20 keywords for marginally relevant news worth tracking."""
                 headers={'Authorization': f'Bearer {groq_key}', 'Content-Type': 'application/json'},
                 json={
                     'model': 'llama-3.3-70b-versatile',
-                    'messages': [{'role': 'user', 'content': prompt}],
+                    'messages': [{'role': 'user', 'content': """You are a financial news filter for a US equity day trader.
+Based on CURRENT macro market conditions, generate keyword lists for filtering financial news headlines.
+Return ONLY this JSON, no markdown:
+{
+  \"high\": [\"keyword1\",\"keyword2\",...],
+  \"medium\": [\"keyword1\",\"keyword2\",...],
+  \"low\": [\"keyword1\",\"keyword2\",...],
+  \"context_note\": \"one sentence describing current market regime\"
+}
+HIGH = 25-30 keywords/phrases that indicate genuinely market-moving events for US equities right now.
+MEDIUM = 25-30 keywords for relevant but non-urgent news.
+LOW = 15-20 keywords for marginally relevant news worth tracking."""}],
                     'temperature': 0.3,
                     'max_tokens': 1024,
                 }
@@ -176,7 +185,7 @@ LOW = 15-20 keywords for marginally relevant news worth tracking."""
             )
             _cached_kw['_loaded_at'] = None
             elapsed_kw = round(time.time() - t0_kw, 1)
-            _emit_status(f'done: Filter keywords updated in {elapsed_kw}s — AI context applied')
+            _emit_status(f'done: Filter keywords updated via Groq in {elapsed_kw}s')
             logger.info('[feed] Keywords refreshed from Groq.')
     except Exception as e:
         _emit_status('idle: Keyword refresh failed — using base keywords')
@@ -271,60 +280,6 @@ Return ONLY a valid JSON array. No markdown."""
     return []
 
 
-# ── Local LLM enrichment ────────────────────────────────────────────────────────
-
-async def local_llm_filter_batch(batch: list) -> list:
-    if not batch:
-        return []
-    local_url = config.get('local_llm_url', '')
-    if not local_url:
-        return []
-    local_model = config.get('local_llm_model', 'llama3.1:8b')
-
-    # Build the same prompt as groq_filter_batch
-    headlines_json = json.dumps([{'id': a['id'], 'title': a['title'], 'source': a['source']} for a in batch])
-    prompt = f"""You are filtering financial news for a US equity day trader.
-For EACH headline return a JSON array. Each element:
-- "id": exact id string
-- "relevance": "HIGH" | "MEDIUM" | "LOW" | "IGNORE"
-- "tickers": array of affected US stock symbols e.g. ["SPY","NVDA"]
-- "sentiment": "Bullish" | "Bearish" | "Neutral"
-- "impact_score": integer 1-10
-- "catalyst_type": "Earnings"|"Fed"|"Macro"|"Analyst"|"M&A"|"Regulatory"|"Geopolitical"|"Other"
-- "summary": one trader-focused sentence (empty string if IGNORE or LOW)
-
-Input:
-{headlines_json}
-
-Return ONLY a valid JSON array. No markdown."""
-
-    # Normalize URL: ensure it ends with /v1/chat/completions
-    endpoint = local_url.rstrip('/')
-    if not endpoint.endswith('/v1/chat/completions'):
-        endpoint = endpoint.rstrip('/') + '/v1/chat/completions'
-
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                endpoint,
-                json={
-                    'model': local_model,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                    'temperature': 0.1,
-                    'max_tokens': 2048,
-                },
-            )
-            r.raise_for_status()
-            text = r.json()['choices'][0]['message']['content'].strip()
-            if text.startswith('```'):
-                text = re.sub(r'^```[a-z]*\n?', '', text)
-                text = re.sub(r'```$', '', text).strip()
-            return json.loads(text)
-    except Exception as e:
-        logger.warning(f'[feed] Local LLM enrichment failed: {e}')
-        return []
-
-
 # ── Source fetchers (Finnhub only) ──────────────────────────────────────────────
 
 def _make_id(title):
@@ -373,7 +328,6 @@ async def _empty_list(): return []
 
 async def ingest_all_sources() -> None:
     finnhub_key = config.get('finnhub_key', '')
-    groq_key    = config.get('groq_key', '')
 
     if not finnhub_key:
         _emit_status('idle: No Finnhub key — skipping ingest')
@@ -394,8 +348,6 @@ async def ingest_all_sources() -> None:
     existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
     new_articles = [a for a in all_articles if a['id'] not in existing_ids]
 
-    # Always stream ALL fetched articles to the raw panel (not just new ones)
-    # so the raw panel is populated even when everything is already in DB
     for article in all_articles:
         _emit_raw(article)
 
@@ -407,21 +359,26 @@ async def ingest_all_sources() -> None:
     for article in new_articles:
         article.update(rule_score(article))
 
-    local_llm_url = config.get('local_llm_url', '')
+    # AI enrichment: local first, Groq as fallback
     to_enrich = [a for a in new_articles if a['relevance'] != 'IGNORE']
-    if to_enrich and (local_llm_url or groq_key):
+    if to_enrich:
         batch = to_enrich[:15]
         ai_results = []
-
-        # Try local LLM first, fall back to Groq
         t0_ai = time.time()
-        if local_llm_url:
-            _emit_status(f'ai: Local LLM enriching {len(batch)} articles...')
-            ai_results = await local_llm_filter_batch(batch)
 
-        if not ai_results and groq_key:
-            _emit_status(f'ai: Groq enriching {len(batch)} articles...')
-            ai_results = await groq_filter_batch(batch)
+        # Try local AI engine first
+        from backend.api.local_ai import grade_batch
+        _emit_status(f'ai: Local AI grading {len(batch)} articles...')
+        ai_results = await grade_batch(batch)
+
+        # Fall back to Groq only if local failed AND Groq key exists
+        if not ai_results:
+            groq_key = config.get('groq_key', '')
+            if groq_key:
+                _emit_status(f'ai: Groq enriching {len(batch)} articles...')
+                ai_results = await groq_filter_batch(batch)
+            else:
+                _emit_status('ai: No AI available — using rule-based scores only')
 
         if ai_results:
             ai_map = {g['id']: g for g in ai_results if isinstance(g, dict)}

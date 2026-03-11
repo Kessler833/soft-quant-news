@@ -15,31 +15,17 @@ router = APIRouter()
 _ai_sem = asyncio.Semaphore(5)
 
 
-# ── Unified AI call: Groq first, Gemini if available ──────────────────────────
+# ── Unified AI call: local first, Groq, then Gemini ──────────────────────────
 
 async def _local_llm_call(prompt_text: str) -> str:
-    """Call a local OpenAI-compatible LLM (Ollama, LM Studio, etc.)."""
-    import httpx
-    local_url = config.get('local_llm_url', '')
-    local_model = config.get('local_llm_model', 'llama3.1:8b')
-
-    endpoint = local_url.rstrip('/')
-    if not endpoint.endswith('/v1/chat/completions'):
-        endpoint = endpoint.rstrip('/') + '/v1/chat/completions'
-
-    async with _ai_sem:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                endpoint,
-                json={
-                    'model': local_model,
-                    'messages': [{'role': 'user', 'content': prompt_text}],
-                    'temperature': 0.2,
-                    'max_tokens': 2048,
-                },
-            )
-            r.raise_for_status()
-            return r.json()['choices'][0]['message']['content'].strip()
+    """Call local LLM using the local_ai engine with robust JSON handling."""
+    from backend.api.local_ai import _call_local
+    return await _call_local(
+        system_prompt="You are a financial analyst. Always respond with the exact format requested. If JSON is requested, return raw valid JSON only — no markdown, no explanation.",
+        user_prompt=prompt_text,
+        max_tokens=2048,
+        temperature=0.2,
+    )
 
 
 async def _ai_call(prompt_text: str) -> str:
@@ -133,7 +119,12 @@ async def _gemini_call(prompt_text: str, gemini_key: str) -> str:
 
 
 def _strip_json(raw: str) -> str:
-    """Remove markdown code fences if present."""
+    """Remove markdown code fences if present, with robust fallback."""
+    from backend.api.local_ai import repair_json
+    parsed = repair_json(raw)
+    if parsed is not None:
+        return json.dumps(parsed)
+    # Fallback to original strip behavior
     text = raw.strip()
     if text.startswith('```'):
         text = re.sub(r'^```[a-z]*\n?', '', text)
@@ -146,8 +137,9 @@ def _strip_json(raw: str) -> str:
 async def generate_premarket_brief() -> None:
     groq_key   = config.get('groq_key', '')
     gemini_key = config.get('gemini_key', '')
-    if not groq_key and not gemini_key:
-        logger.warning('[ai] No AI key — skipping pre-market brief.')
+    local_url  = config.get('local_llm_url', '')
+    if not groq_key and not gemini_key and not local_url:
+        logger.warning('[ai] No AI configured — skipping pre-market brief.')
         return
 
     articles  = db.get_articles_since(hours=12)
@@ -206,7 +198,6 @@ async def get_premarket_brief():
             return json.loads(raw)
         except Exception:
             pass
-    # Nothing cached — generate on-demand
     await generate_premarket_brief()
     raw = db.get_ai_cache('premarket_brief')
     if raw:
@@ -223,7 +214,6 @@ async def get_premarket_brief():
 
 @router.post('/premarket-brief')
 async def trigger_premarket_brief():
-    """Manually trigger regeneration."""
     asyncio.create_task(generate_premarket_brief())
     return {'status': 'generating'}
 
