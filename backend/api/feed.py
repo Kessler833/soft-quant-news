@@ -151,8 +151,8 @@ async def _fetch_finnhub_general(key):
 
 
 async def _fetch_finnhub_company(key, ticker):
-    now   = datetime.now(timezone.utc)
-    today = now.strftime('%Y-%m-%d')
+    now       = datetime.now(timezone.utc)
+    today     = now.strftime('%Y-%m-%d')
     yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -224,8 +224,15 @@ def _schedule_drift(article_id, ticker):
         now = datetime.now(timezone.utc)
         for minutes in [5, 15, 30]:
             run_at = now + timedelta(minutes=minutes)
-            scheduler.add_job(_track_drift, 'date', run_date=run_at, args=[article_id, ticker, minutes],
-                              id=f'drift_{article_id}_{ticker}_{minutes}', replace_existing=True, misfire_grace_time=60)
+            scheduler.add_job(
+                _track_drift, 'date',
+                run_date=run_at,
+                args=[article_id, ticker, minutes],
+                id=f'drift_{article_id}_{ticker}_{minutes}',
+                replace_existing=True,
+                misfire_grace_time=60,
+            )
+        logger.info(f'[feed] Drift jobs scheduled: {ticker} at +5m/+15m/+30m (article {article_id[:8]})')
     except Exception as e:
         logger.warning(f'[feed] Drift schedule: {e}')
 
@@ -234,7 +241,11 @@ async def _track_drift(article_id, ticker, minutes):
     try:
         from backend.api.prices import get_quote_price
         price = await get_quote_price(ticker)
-        if price: db.save_drift(article_id, ticker, minutes, price)
+        if price:
+            db.save_drift(article_id, ticker, minutes, price)
+            logger.info(f'[feed] Drift tracked: {ticker} +{minutes}m = {price}')
+        else:
+            logger.warning(f'[feed] Drift track: no price returned for {ticker} +{minutes}m')
     except Exception as e:
         logger.warning(f'[feed] Drift track: {e}')
 
