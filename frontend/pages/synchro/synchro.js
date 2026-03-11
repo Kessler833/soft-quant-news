@@ -1,11 +1,11 @@
-// ── API rate caps (active sources only) ────────────────────────────────────────────
+// ── API rate caps (active sources only) ──────────────────────────────────────────────────
 const API_CAPS = [
   { id: 'finnhub', name: 'Finnhub',  rpm: 60,  rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
   { id: 'alpaca',  name: 'Alpaca',   rpm: 200, rpd: null, color: 'var(--text-primary)',   note: 'Data stream' },
 ]
 
 const DEFAULT_OLLAMA_URL   = 'http://localhost:11434'
-const DEFAULT_OLLAMA_MODEL = 'gemma3:4b'
+const DEFAULT_OLLAMA_MODEL = 'phi4-mini'
 
 let _synchroInitDone = false
 
@@ -78,7 +78,7 @@ function _synchroLoadFields() {
   }
 }
 
-// ── Rate Limit Calculator ──────────────────────────────────────────────────
+// ── Rate Limit Calculator ────────────────────────────────────────────────────────
 
 function _calcApiStats(cap, activeMinutes) {
   const BUFFER = 0.85
@@ -213,7 +213,7 @@ function _synchroClearKeys() {
   _synchroShowSaveMsg('Keys cleared.', 'success')
 }
 
-// ── Status tiles ──────────────────────────────────────────────────────────────────
+// ── Status tiles ────────────────────────────────────────────────────────────────────
 
 async function _synchroCheckAll() {
   const grid = document.getElementById('synchro-status-grid')
@@ -272,7 +272,7 @@ function _wsCheck() {
   })
 }
 
-// ── Feed stats ──────────────────────────────────────────────────────────────────
+// ── Feed stats ───────────────────────────────────────────────────────────────────
 
 async function _synchroLoadStats() {
   const el = document.getElementById('synchro-stats')
@@ -295,7 +295,7 @@ async function _synchroLoadStats() {
   }
 }
 
-// ── Misc ────────────────────────────────────────────────────────────────────────────
+// ── Misc ───────────────────────────────────────────────────────────────────────────────
 
 function _synchroResetCache() {
   if (!confirm('Reset all cached settings?')) return
