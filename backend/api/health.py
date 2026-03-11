@@ -17,6 +17,8 @@ class KeysPayload(BaseModel):
     newsapi_key:         str = ''
     stockgeist_token:    str = ''
     ingest_interval_sec: int = 90
+    ollama_url:          str = ''
+    ollama_model:        str = ''
 
 
 async def _validate_finnhub(key: str) -> bool:
@@ -60,6 +62,16 @@ async def _validate_newsapi(key: str) -> bool:
         return False
 
 
+async def _validate_ollama(url: str) -> bool:
+    check_url = (url or config.get('ollama_url', 'http://localhost:11434')).rstrip('/')
+    try:
+        async with httpx.AsyncClient(timeout=6) as c:
+            r = await c.get(f'{check_url}/api/tags')
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
 async def _post_key_tasks() -> None:
     from backend.api.feed import ingest_all_sources
     await ingest_all_sources()
@@ -76,6 +88,11 @@ async def post_health(payload: KeysPayload):
         'stockgeist_token':    payload.stockgeist_token,
         'ingest_interval_sec': payload.ingest_interval_sec,
     }
+    # Only overwrite Ollama settings when non-empty values are provided.
+    if payload.ollama_url:
+        keys_dict['ollama_url'] = payload.ollama_url
+    if payload.ollama_model:
+        keys_dict['ollama_model'] = payload.ollama_model
     config.set_keys(keys_dict)
 
     validated = {
@@ -83,6 +100,7 @@ async def post_health(payload: KeysPayload):
         'alpaca':    await _validate_alpaca(payload.alpaca_key, payload.alpaca_secret),
         'marketaux': await _validate_marketaux(payload.marketaux_token),
         'newsapi':   await _validate_newsapi(payload.newsapi_key),
+        'ollama':    await _validate_ollama(payload.ollama_url),
     }
 
     try:
