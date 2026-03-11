@@ -19,12 +19,12 @@ function createSetupWindow() {
     center: true,
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'setup-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   })
-  setupWin.loadFile(path.join(__dirname, '..', 'frontend', 'setup', 'setup.html'))
+  setupWin.loadFile(path.join(__dirname, 'setup.html'))
   setupWin.once('ready-to-show', () => { setupWin.show() })
   setupWin.on('closed', () => { setupWin = null })
   return setupWin
