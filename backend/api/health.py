@@ -10,18 +10,14 @@ router = APIRouter()
 
 
 class KeysPayload(BaseModel):
-    finnhub_key: str = ''
-    alpaca_key: str = ''
-    alpaca_secret: str = ''
-    marketaux_token: str = ''
-    groq_key: str = ''
-    benzinga_key: str = ''
-    newsapi_key: str = ''
-    stockgeist_token: str = ''
-    groq_rpm: int = 25
+    finnhub_key:         str = ''
+    alpaca_key:          str = ''
+    alpaca_secret:       str = ''
+    marketaux_token:     str = ''
+    newsapi_key:         str = ''
     ingest_interval_sec: int = 90
-    local_llm_url: str = ''
-    local_llm_model: str = ''
+    local_llm_url:       str = ''
+    local_llm_model:     str = ''
 
 
 async def _validate_finnhub(key: str) -> bool:
@@ -30,8 +26,7 @@ async def _validate_finnhub(key: str) -> bool:
         async with httpx.AsyncClient(timeout=6) as c:
             r = await c.get(f'https://finnhub.io/api/v1/news?category=general&token={key}&limit=1')
             return r.status_code == 200
-    except Exception:
-        return False
+    except: return False
 
 
 async def _validate_alpaca(key: str, secret: str) -> bool:
@@ -41,8 +36,7 @@ async def _validate_alpaca(key: str, secret: str) -> bool:
             r = await c.get('https://paper-api.alpaca.markets/v2/account',
                             headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret})
             return r.status_code == 200
-    except Exception:
-        return False
+    except: return False
 
 
 async def _validate_marketaux(token: str) -> bool:
@@ -51,19 +45,7 @@ async def _validate_marketaux(token: str) -> bool:
         async with httpx.AsyncClient(timeout=6) as c:
             r = await c.get(f'https://api.marketaux.com/v1/news/all?api_token={token}&limit=1')
             return r.status_code == 200
-    except Exception:
-        return False
-
-
-async def _validate_groq(key: str) -> bool:
-    if not key: return False
-    try:
-        async with httpx.AsyncClient(timeout=8) as c:
-            r = await c.get('https://api.groq.com/openai/v1/models',
-                            headers={'Authorization': f'Bearer {key}'})
-            return r.status_code == 200
-    except Exception:
-        return False
+    except: return False
 
 
 async def _validate_newsapi(key: str) -> bool:
@@ -72,31 +54,17 @@ async def _validate_newsapi(key: str) -> bool:
         async with httpx.AsyncClient(timeout=6) as c:
             r = await c.get(f'https://newsapi.org/v2/top-headlines?country=us&pageSize=1&apiKey={key}')
             return r.status_code == 200
-    except Exception:
-        return False
+    except: return False
 
 
-async def _validate_benzinga(key: str) -> bool:
-    if not key: return False
-    try:
-        async with httpx.AsyncClient(timeout=6) as c:
-            r = await c.get(f'https://api.benzinga.com/api/v2/news?token={key}&pageSize=1')
-            return r.status_code == 200
-    except Exception:
-        return False
-
-
-async def _post_key_tasks(groq_key: str) -> None:
-    """Run after keys are stored: refresh keywords if no cache exists, then ingest."""
+async def _post_key_tasks() -> None:
     from backend.api.feed import refresh_keywords, ingest_all_sources
-
     kw = db.get_latest_keywords()
     if not kw:
-        logger.info('[health] No keyword cache — triggering immediate refresh.')
+        logger.info('[health] No keyword cache — triggering refresh.')
         await refresh_keywords(force=True)
     else:
         logger.info('[health] Keyword cache exists — skipping forced refresh.')
-
     await ingest_all_sources()
 
 
@@ -107,11 +75,7 @@ async def post_health(payload: KeysPayload):
         'alpaca_key':          payload.alpaca_key,
         'alpaca_secret':       payload.alpaca_secret,
         'marketaux_token':     payload.marketaux_token,
-        'groq_key':            payload.groq_key,
-        'benzinga_key':        payload.benzinga_key,
         'newsapi_key':         payload.newsapi_key,
-        'stockgeist_token':    payload.stockgeist_token,
-        'groq_rpm':            payload.groq_rpm,
         'ingest_interval_sec': payload.ingest_interval_sec,
         'local_llm_url':       payload.local_llm_url,
         'local_llm_model':     payload.local_llm_model,
@@ -122,15 +86,12 @@ async def post_health(payload: KeysPayload):
         'finnhub':   await _validate_finnhub(payload.finnhub_key),
         'alpaca':    await _validate_alpaca(payload.alpaca_key, payload.alpaca_secret),
         'marketaux': await _validate_marketaux(payload.marketaux_token),
-        'groq':      await _validate_groq(payload.groq_key),
-        'benzinga':  await _validate_benzinga(payload.benzinga_key),
         'newsapi':   await _validate_newsapi(payload.newsapi_key),
     }
 
-    # Reschedule ingest interval if changed
     try:
         from backend.main import scheduler
-        job = scheduler.get_job('ingest_all_sources')
+        job = scheduler.get_job('ingest')
         if job:
             from apscheduler.triggers.interval import IntervalTrigger
             job.reschedule(trigger=IntervalTrigger(seconds=payload.ingest_interval_sec))
@@ -138,16 +99,13 @@ async def post_health(payload: KeysPayload):
     except Exception as e:
         logger.warning(f'[health] Could not reschedule ingest: {e}')
 
-    # Fire keyword refresh + ingest in background now that keys are available
-    asyncio.create_task(_post_key_tasks(payload.groq_key))
-
+    asyncio.create_task(_post_key_tasks())
     logger.info(f'[health] Keys stored. Validation: {validated}')
     return {'status': 'ok', 'validated': validated}
 
 
 @router.post('/health/reset-cache')
 async def reset_cache():
-    """Soft reset: clear article cache, AI data, keywords. Preserves watchlist and API keys."""
     db.reset_article_cache()
     logger.info('[health] Article cache reset by user.')
     return {'status': 'ok', 'message': 'Cache cleared. Watchlist and API keys preserved.'}
