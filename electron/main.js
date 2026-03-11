@@ -1,19 +1,13 @@
 /**
  * electron/main.js
- * App entry point.
  *
  * Boot sequence:
- *   1. Show setup window → ensureOllama() (download + pull if needed)
- *   2. Start FastAPI backend
- *   3. Wait for backend health check
- *   4. Open main window
+ *   1. Start FastAPI backend
+ *   2. Wait for backend health
+ *   3. Open main window
+ *   4. Start Ollama in background — sends IPC events to Synchro tab live
  *
- * Safe shutdown:
- *   - window-all-closed  → kill FastAPI + Ollama (if we started it)
- *   - before-quit        → same
- *   - process SIGTERM    → same (e.g. task manager / OS kill)
- *   - process SIGINT     → same (Ctrl+C in dev)
- *   - uncaughtException  → same + log
+ * Safe shutdown covers: window close, before-quit, SIGTERM, SIGINT, uncaughtException
  */
 
 const { app, BrowserWindow, ipcMain } = require('electron')
@@ -21,10 +15,9 @@ const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
 
-const { runSetup }  = require('./setup-window')
-const { stopOllama } = require('./ollama-manager')
+const { ensureOllama, stopOllama } = require('./ollama-manager')
 
-let mainWindow    = null
+let mainWindow     = null
 let fastApiProcess = null
 let _shuttingDown  = false
 
@@ -33,12 +26,10 @@ let _shuttingDown  = false
 function safeShutdown(reason) {
   if (_shuttingDown) return
   _shuttingDown = true
-  console.log(`[main] Safe shutdown triggered: ${reason}`)
+  console.log(`[main] Safe shutdown: ${reason}`)
 
-  // Stop Ollama server (only if we started it)
   stopOllama()
 
-  // Kill FastAPI
   if (fastApiProcess) {
     try {
       if (process.platform === 'win32') {
@@ -53,25 +44,17 @@ function safeShutdown(reason) {
   }
 }
 
-// Register all possible exit scenarios
-app.on('before-quit',         () => safeShutdown('before-quit'))
-app.on('window-all-closed',   () => { safeShutdown('window-all-closed'); app.quit() })
-process.on('SIGTERM',         () => { safeShutdown('SIGTERM');  process.exit(0) })
-process.on('SIGINT',          () => { safeShutdown('SIGINT');   process.exit(0) })
-process.on('uncaughtException', (err) => {
+app.on('before-quit',       () => safeShutdown('before-quit'))
+app.on('window-all-closed', () => { safeShutdown('window-all-closed'); app.quit() })
+process.on('SIGTERM',       () => { safeShutdown('SIGTERM');  process.exit(0) })
+process.on('SIGINT',        () => { safeShutdown('SIGINT');   process.exit(0) })
+process.on('uncaughtException', err => {
   console.error('[main] Uncaught exception:', err)
   safeShutdown('uncaughtException')
   process.exit(1)
 })
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', reason => {
   console.error('[main] Unhandled rejection:', reason)
-  // Don't exit — unhandled promise rejections shouldn't crash the app
-})
-
-// ── IPC bridge for setup window ──────────────────────────────────────────────
-
-ipcMain.on('setup:skip-req', () => {
-  ipcMain.emit('setup:skip')
 })
 
 // ── Backend ──────────────────────────────────────────────────────────────────
@@ -80,7 +63,7 @@ function waitForBackend(retries = 40, delay = 500) {
   return new Promise((resolve, reject) => {
     let attempts = 0
     function attempt() {
-      http.get('http://127.0.0.1:8000/api/health', (res) => {
+      http.get('http://127.0.0.1:8000/api/health', res => {
         if (res.statusCode === 200) resolve()
         else retry()
       }).on('error', retry)
@@ -94,67 +77,63 @@ function waitForBackend(retries = 40, delay = 500) {
 }
 
 function startBackend() {
-  const projectRoot = path.join(__dirname, '..')
-  const pythonPath  = path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
-
+  const root       = path.join(__dirname, '..')
+  const pythonPath = path.join(root, '.venv', 'Scripts', 'python.exe')
   fastApiProcess = spawn(
     pythonPath,
     ['-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', '8000'],
-    { cwd: projectRoot, stdio: 'pipe' }
+    { cwd: root, stdio: 'pipe' }
   )
-
   fastApiProcess.stdout.on('data', d => console.log('[FastAPI]', d.toString().trim()))
   fastApiProcess.stderr.on('data', d => console.error('[FastAPI ERR]', d.toString().trim()))
-  fastApiProcess.on('exit', code => {
-    console.log(`[FastAPI] Exited with code ${code}`)
-    fastApiProcess = null
-  })
+  fastApiProcess.on('exit', code => { console.log(`[FastAPI] Exited with code ${code}`); fastApiProcess = null })
 }
 
-// ── Main window ───────────────────────────────────────────────────────────────
+// ── Main window ─────────────────────────────────────────────────────────────
 
 async function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1600,
-    height: 900,
-    show: false,
+    width: 1600, height: 900, show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   })
-
   await mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'index.html'))
-
   mainWindow.show()
-
   if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools()
   }
-
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
-// ── Boot sequence ─────────────────────────────────────────────────────────────
+// ── Boot sequence ────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  // Step 1: Ensure Ollama is ready (shows setup window only if needed)
-  await runSetup()
-
-  // Step 2: Start Python backend
+  // 1. Start backend immediately — no Ollama blocking
   startBackend()
 
-  // Step 3: Wait for backend, then open main window
   try {
     await waitForBackend(40, 500)
-    console.log('[main] Backend ready — opening main window.')
+    console.log('[main] Backend ready — opening window.')
     await createMainWindow()
   } catch (err) {
     console.error('[main] Backend failed to start:', err.message)
     safeShutdown('backend-timeout')
     app.quit()
+    return
   }
+
+  // 2. Start Ollama in background after window is open
+  //    IPC events go live to the Synchro tab's download manager card
+  ensureOllama({
+    onStep:     (step, total, label) => mainWindow?.webContents.send('ollama:step',     { step, total, label }),
+    onProgress: (downloaded, total)  => mainWindow?.webContents.send('ollama:progress', { downloaded, total, pct: Math.round((downloaded / total) * 100) }),
+    onStatus:   msg                  => mainWindow?.webContents.send('ollama:status',   { msg }),
+    onDone:     ()                   => mainWindow?.webContents.send('ollama:done',     {}),
+    onError:    err                  => mainWindow?.webContents.send('ollama:error',    { msg: err.message }),
+  })
 })
 
 app.on('activate', async () => {
