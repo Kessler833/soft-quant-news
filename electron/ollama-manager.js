@@ -19,7 +19,7 @@ const os = require('os')
 
 const OLLAMA_PORT = 11434
 const OLLAMA_HOST = `http://127.0.0.1:${OLLAMA_PORT}`
-const DEFAULT_MODEL = 'qwen2.5:3b'
+const DEFAULT_MODEL = 'gemma3:4b'
 
 const OLLAMA_DIR = path.join(app.getPath('userData'), 'ollama')
 const OLLAMA_BIN = path.join(OLLAMA_DIR, process.platform === 'win32' ? 'ollama.exe' : 'ollama')
@@ -27,7 +27,7 @@ const OLLAMA_BIN = path.join(OLLAMA_DIR, process.platform === 'win32' ? 'ollama.
 let _ollamaProcess = null
 let _weStartedIt   = false
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────────────────
 
 function _sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -80,7 +80,6 @@ function isOllamaRunning() {
 }
 
 function isBinaryInstalled() {
-  // Check our managed copy OR the standard system install location
   const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
   return fs.existsSync(OLLAMA_BIN) || fs.existsSync(systemBin)
 }
@@ -110,11 +109,6 @@ function _streamToFile(reqUrl, destPath, onProgress, redirectCount = 0) {
   })
 }
 
-/**
- * Download OllamaSetup.exe and open it via shell.openPath (no spawn).
- * The setup window will show a "Done — I installed it" button.
- * We wait for the user to confirm, then check if ollama is running.
- */
 async function downloadAndOpenInstaller(onProgress, onStatus, onWaitForUser) {
   if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true })
 
@@ -131,8 +125,6 @@ async function downloadAndOpenInstaller(onProgress, onStatus, onWaitForUser) {
   onStatus('Opening installer — please complete the setup, then click “Done” below.')
   await shell.openPath(installerPath)
 
-  // Hand control to the setup window — it will show a "Done" button
-  // and call window.electronAPI.setupInstallerDone() when clicked
   await onWaitForUser()
 
   _tryDelete(installerPath)
@@ -141,7 +133,6 @@ async function downloadAndOpenInstaller(onProgress, onStatus, onWaitForUser) {
 function startOllamaServer(onStatus) {
   return new Promise((resolve, reject) => {
     onStatus('Starting Ollama server...')
-    // Prefer system install, fall back to our managed copy
     const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
     const bin = fs.existsSync(systemBin) ? systemBin
               : fs.existsSync(OLLAMA_BIN) ? OLLAMA_BIN
@@ -228,7 +219,6 @@ async function ensureOllama({ onStep, onProgress, onStatus, onWaitForUser, onDon
       onStatus('Ollama binary found.')
     }
 
-    // After install, Ollama may already be running (installer auto-starts it)
     if (!await isOllamaRunning()) {
       onStep(2, 3, 'Starting Ollama server...')
       await startOllamaServer(onStatus)
