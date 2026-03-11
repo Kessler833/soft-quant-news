@@ -1,4 +1,4 @@
-// ── API rate caps (active sources only) ──────────────────────────────────────
+// ── API rate caps (active sources only) ────────────────────────────────────────────
 const API_CAPS = [
   { id: 'finnhub', name: 'Finnhub',  rpm: 60,  rpd: null, color: 'var(--accent-orange)', note: 'finnhub.io' },
   { id: 'alpaca',  name: 'Alpaca',   rpm: 200, rpd: null, color: 'var(--text-primary)',   note: 'Data stream' },
@@ -17,6 +17,7 @@ async function initSynchro() {
   document.getElementById('synchro-clear-btn')?.addEventListener('click',       _synchroClearKeys)
   document.getElementById('synchro-check-btn')?.addEventListener('click',       _synchroCheckAll)
   document.getElementById('synchro-reset-cache-btn')?.addEventListener('click', _synchroResetCache)
+  document.getElementById('synchro-ollama-save-btn')?.addEventListener('click', _synchroSaveOllama)
   document.getElementById('rate-apply-btn')?.addEventListener('click',          _rateApply)
   document.getElementById('rate-from')?.addEventListener('input',               _rateCalcUpdate)
   document.getElementById('rate-until')?.addEventListener('input',              _rateCalcUpdate)
@@ -36,13 +37,21 @@ async function _synchroPushKeysToBackend() {
     await apiHealth({
       ...keys,
       ingest_interval_sec: rate.intervalSec || 90,
+      ollama_url:   keys.ollama_url   || '',
+      ollama_model: keys.ollama_model || '',
     })
     console.log('[synchro] Keys auto-pushed to backend on launch.')
   } catch (e) {
     console.warn('[synchro] Auto-push failed:', e.message)
     setTimeout(async () => {
       try {
-        await apiHealth({ ...QuantCache.loadApiKeys(), ingest_interval_sec: 90 })
+        const k = QuantCache.loadApiKeys()
+        await apiHealth({
+          ...k,
+          ingest_interval_sec: 90,
+          ollama_url:   k.ollama_url   || '',
+          ollama_model: k.ollama_model || '',
+        })
       } catch (_) {}
     }, 3000)
   }
@@ -56,6 +65,8 @@ function _synchroLoadFields() {
   _set('key-finnhub',       keys.finnhub_key   || '')
   _set('key-newsapi',       keys.newsapi_key   || '')
   _set('key-base-url',      keys.base_url      || '')
+  _set('key-ollama-url',    keys.ollama_url    || 'http://localhost:11434')
+  _set('key-ollama-model',  keys.ollama_model  || 'llama3')
   if (rate.from)  _set('rate-from',  rate.from)
   if (rate.until) _set('rate-until', rate.until)
   if (rate.alwaysOn !== undefined) {
@@ -64,7 +75,7 @@ function _synchroLoadFields() {
   }
 }
 
-// ── Rate Limit Calculator ─────────────────────────────────────────────────────
+// ── Rate Limit Calculator ──────────────────────────────────────────────────
 
 function _calcApiStats(cap, activeMinutes) {
   const BUFFER = 0.85
@@ -141,23 +152,32 @@ async function _rateApply() {
   QuantCache.saveRateSettings({ from: _get('rate-from'), until: _get('rate-until'), alwaysOn, intervalSec })
   const keys = QuantCache.loadApiKeys()
   try {
-    await apiHealth({ ...keys, ingest_interval_sec: intervalSec })
+    await apiHealth({
+      ...keys,
+      ingest_interval_sec: intervalSec,
+      ollama_url:   keys.ollama_url   || '',
+      ollama_model: keys.ollama_model || '',
+    })
     _synchroShowSaveMsg(`Schedule applied \u2014 ingest every ${intervalSec}s.`, 'success')
   } catch (e) {
     _synchroShowSaveMsg(`Saved locally. Backend: ${e.message}`, 'warning')
   }
 }
 
-// ── Save keys ─────────────────────────────────────────────────────────────────
+// ── Save keys ───────────────────────────────────────────────────────────────────
 
 async function _synchroSave() {
   const rate = QuantCache.loadRateSettings()
+  const existing = QuantCache.loadApiKeys()
   const apiKeys = {
     alpaca_key:          _get('key-alpaca-key'),
     alpaca_secret:       _get('key-alpaca-secret'),
     finnhub_key:         _get('key-finnhub'),
     newsapi_key:         _get('key-newsapi'),
     base_url:            _get('key-base-url'),
+    // preserve ollama values from cache if inputs are empty
+    ollama_url:          _get('key-ollama-url')   || existing.ollama_url   || 'http://localhost:11434',
+    ollama_model:        _get('key-ollama-model') || existing.ollama_model || 'llama3',
     ingest_interval_sec: rate.intervalSec || 90,
   }
   QuantCache.saveApi(apiKeys)
@@ -170,6 +190,20 @@ async function _synchroSave() {
   }
 }
 
+async function _synchroSaveOllama() {
+  const url   = _get('key-ollama-url')   || 'http://localhost:11434'
+  const model = _get('key-ollama-model') || 'llama3'
+  const existing = QuantCache.loadApiKeys()
+  QuantCache.saveApi({ ...existing, ollama_url: url, ollama_model: model })
+  try {
+    await apiHealth({ ...QuantCache.loadApiKeys(), ollama_url: url, ollama_model: model })
+    _synchroShowOllamaMsg('&#10003; Ollama settings saved.', 'success')
+    await _synchroCheckAll()
+  } catch (e) {
+    _synchroShowOllamaMsg(`Saved locally. Backend offline: ${e.message}`, 'warning')
+  }
+}
+
 function _synchroClearKeys() {
   if (!confirm('Clear all saved API keys from browser?')) return
   QuantCache.saveApi({})
@@ -177,7 +211,7 @@ function _synchroClearKeys() {
   _synchroShowSaveMsg('Keys cleared.', 'success')
 }
 
-// ── Status tiles ──────────────────────────────────────────────────────────────
+// ── Status tiles ──────────────────────────────────────────────────────────────────
 
 async function _synchroCheckAll() {
   const grid = document.getElementById('synchro-status-grid')
@@ -190,6 +224,7 @@ async function _synchroCheckAll() {
     { name: 'Finnhub',    fn: () => _keyCheck('finnhub_key') },
     { name: 'NewsAPI',    fn: () => _keyCheck('newsapi_key') },
     { name: 'Polymarket', fn: () => fetch('http://localhost:8000/api/polymarket/markets').then(r => r.ok ? 'Connected' : 'Error') },
+    { name: 'Ollama',     fn: () => _ollamaCheck() },
   ]
 
   grid.innerHTML = checks.map(c => `
@@ -205,7 +240,7 @@ async function _synchroCheckAll() {
       const result = await Promise.race([c.fn(), new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 4000))])
       if (el) {
         el.textContent = result
-        el.className = `status-tile-val ${result === 'Missing' || result.includes('Error') ? 'status-warn' : 'status-ok'}`
+        el.className = `status-tile-val ${result === 'Missing' || result.includes('Error') || result === 'Offline' ? 'status-warn' : 'status-ok'}`
       }
     } catch (e) {
       if (el) { el.textContent = 'Offline'; el.className = 'status-tile-val status-error' }
@@ -215,6 +250,13 @@ async function _synchroCheckAll() {
 
 function _keyCheck(keyName) {
   return Promise.resolve(QuantCache.getApiKey(keyName) ? 'Configured' : 'Missing')
+}
+
+function _ollamaCheck() {
+  const url = (QuantCache.getApiKey('ollama_url') || 'http://localhost:11434').replace(/\/$/, '')
+  return fetch(url + '/api/tags', { method: 'GET' })
+    .then(r => r.ok ? 'Running' : 'Offline')
+    .catch(() => 'Offline')
 }
 
 function _wsCheck() {
@@ -228,7 +270,7 @@ function _wsCheck() {
   })
 }
 
-// ── Feed stats ────────────────────────────────────────────────────────────────
+// ── Feed stats ──────────────────────────────────────────────────────────────────
 
 async function _synchroLoadStats() {
   const el = document.getElementById('synchro-stats')
@@ -251,7 +293,7 @@ async function _synchroLoadStats() {
   }
 }
 
-// ── Misc ──────────────────────────────────────────────────────────────────────
+// ── Misc ────────────────────────────────────────────────────────────────────────────
 
 function _synchroResetCache() {
   if (!confirm('Reset all cached settings?')) return
@@ -263,6 +305,14 @@ function _synchroResetCache() {
 
 function _synchroShowSaveMsg(msg, type) {
   const el = document.getElementById('synchro-save-msg')
+  if (el) {
+    el.innerHTML = `<div class="notification notification--${type}">${msg}</div>`
+    setTimeout(() => { if (el) el.innerHTML = '' }, 4000)
+  }
+}
+
+function _synchroShowOllamaMsg(msg, type) {
+  const el = document.getElementById('synchro-ollama-msg')
   if (el) {
     el.innerHTML = `<div class="notification notification--${type}">${msg}</div>`
     setTimeout(() => { if (el) el.innerHTML = '' }, 4000)
