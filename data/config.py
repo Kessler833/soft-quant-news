@@ -2,7 +2,7 @@
 
 KEYS = {
     'ollama_url':   'http://localhost:11434',
-    'ollama_model': 'gemma3:4b',
+    'ollama_model': 'phi4-mini',
 }
 
 
