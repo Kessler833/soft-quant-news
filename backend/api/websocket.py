@@ -1,8 +1,6 @@
 import asyncio
-import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from data import db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -25,14 +23,6 @@ async def ws_feed(websocket: WebSocket):
     await websocket.accept()
     connected_clients.add(websocket)
     logger.info(f'[ws] Client connected. Total: {len(connected_clients)}')
-
-    # Send last 10 articles as initial payload
-    try:
-        recent = db.get_latest_articles(limit=10)
-        for article in recent:
-            await websocket.send_json(article)
-    except Exception as e:
-        logger.warning(f'[ws] Failed to send initial articles: {e}')
 
     try:
         while True:
