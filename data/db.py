@@ -86,6 +86,7 @@ def save_article(article: dict) -> None:
     with _lock:
         conn = get_conn()
         cur = conn.cursor()
+        # Insert new row; if id already exists the INSERT is skipped.
         cur.execute(
             """
             INSERT OR IGNORE INTO articles
@@ -108,6 +109,26 @@ def save_article(article: dict) -> None:
                 article.get('processed_at', datetime.now(timezone.utc).isoformat()),
             )
         )
+        # Always refresh scoring fields so re-runs update stale rows.
+        cur.execute(
+            """
+            UPDATE articles
+               SET sentiment     = ?,
+                   relevance     = ?,
+                   impact_score  = ?,
+                   catalyst_type = ?,
+                   processed_at  = ?
+             WHERE id = ?
+            """,
+            (
+                article.get('sentiment', 'Neutral'),
+                article.get('relevance', 'MEDIUM'),
+                article.get('impact_score', 5),
+                article.get('catalyst_type', 'Other'),
+                article.get('processed_at', datetime.now(timezone.utc).isoformat()),
+                article.get('id'),
+            )
+        )
         conn.commit()
         conn.close()
 
@@ -125,8 +146,11 @@ def save_drift(article_id: str, ticker: str, minutes: int, price: float) -> None
         if row:
             cur.execute(f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?', (price, article_id, ticker))
         else:
-            cur.execute('INSERT INTO drift_tracking (article_id, ticker, tracked_at) VALUES (?,?,?)', (article_id, ticker, datetime.now(timezone.utc).isoformat()))
-            cur.execute(f'UPDATE drift_tracking SET {col}=? WHERE article_id=? AND ticker=?', (price, article_id, ticker))
+            # First price snapshot becomes price_at_news as well as the timed column.
+            cur.execute(
+                f'INSERT INTO drift_tracking (article_id, ticker, price_at_news, {col}, tracked_at) VALUES (?,?,?,?,?)',
+                (article_id, ticker, price, price, datetime.now(timezone.utc).isoformat())
+            )
         conn.commit()
         conn.close()
 
@@ -158,59 +182,63 @@ def get_latest_articles(
     catalyst_filter: str = None,
     ticker_filter: str = None,
 ) -> list:
-    conn = get_conn()
-    cur = conn.cursor()
-    query = 'SELECT * FROM articles'
-    conditions = []
-    params = []
-    if relevance_filter:
-        conditions.append('relevance = ?')
-        params.append(relevance_filter.upper())
-    if sentiment_filter:
-        conditions.append('sentiment = ?')
-        params.append(sentiment_filter)
-    if catalyst_filter:
-        conditions.append('catalyst_type = ?')
-        params.append(catalyst_filter)
-    if ticker_filter:
-        conditions.append("tickers LIKE ?")
-        params.append(f'%{ticker_filter.upper()}%')
-    if conditions:
-        query += ' WHERE ' + ' AND '.join(conditions)
-    query += ' ORDER BY published_at DESC LIMIT ?'
-    params.append(limit)
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        query = 'SELECT * FROM articles'
+        conditions = []
+        params = []
+        if relevance_filter:
+            conditions.append('relevance = ?')
+            params.append(relevance_filter.upper())
+        if sentiment_filter:
+            conditions.append('sentiment = ?')
+            params.append(sentiment_filter)
+        if catalyst_filter:
+            conditions.append('catalyst_type = ?')
+            params.append(catalyst_filter)
+        if ticker_filter:
+            conditions.append("tickers LIKE ?")
+            params.append(f'%{ticker_filter.upper()}%')
+        if conditions:
+            query += ' WHERE ' + ' AND '.join(conditions)
+        query += ' ORDER BY published_at DESC LIMIT ?'
+        params.append(limit)
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        conn.close()
+        return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
 
 
 def get_articles_since(hours: int = 4) -> list:
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute('SELECT * FROM articles WHERE published_at >= ? ORDER BY published_at DESC', (since,))
-    rows = cur.fetchall()
-    conn.close()
-    return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM articles WHERE published_at >= ? ORDER BY published_at DESC', (since,))
+        rows = cur.fetchall()
+        conn.close()
+        return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
 
 
 def get_articles_for_ticker(ticker: str) -> list:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM articles WHERE tickers LIKE ? ORDER BY published_at DESC LIMIT 50", (f'%{ticker.upper()}%',))
-    rows = cur.fetchall()
-    conn.close()
-    return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM articles WHERE tickers LIKE ? ORDER BY published_at DESC LIMIT 50", (f'%{ticker.upper()}%',))
+        rows = cur.fetchall()
+        conn.close()
+        return [_row_to_article(row, ARTICLE_COLUMNS) for row in rows]
 
 
 def get_ai_cache(key: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute('SELECT content FROM ai_cache WHERE key = ?', (key,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else None
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT content FROM ai_cache WHERE key = ?', (key,))
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row else None
 
 
 def set_ai_cache(key: str, content: str) -> None:
@@ -223,12 +251,13 @@ def set_ai_cache(key: str, content: str) -> None:
 
 
 def get_watchlist() -> list:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute('SELECT ticker FROM watchlist ORDER BY added_at DESC')
-    rows = cur.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT ticker FROM watchlist ORDER BY added_at DESC')
+        rows = cur.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
 
 
 def add_to_watchlist(ticker: str) -> None:
@@ -263,13 +292,14 @@ def save_polymarket_markets(markets: list) -> None:
 
 
 def get_polymarket_markets() -> list:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute('SELECT id, question, probability, volume, prev_probability, updated_at FROM polymarket_markets ORDER BY volume DESC')
-    rows = cur.fetchall()
-    conn.close()
-    columns = ['id', 'question', 'probability', 'volume', 'prev_probability', 'updated_at']
-    return [dict(zip(columns, row)) for row in rows]
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT id, question, probability, volume, prev_probability, updated_at FROM polymarket_markets ORDER BY volume DESC')
+        rows = cur.fetchall()
+        conn.close()
+        columns = ['id', 'question', 'probability', 'volume', 'prev_probability', 'updated_at']
+        return [dict(zip(columns, row)) for row in rows]
 
 
 def get_polymarket_alerts(threshold: float = 0.05) -> list:
@@ -278,11 +308,12 @@ def get_polymarket_alerts(threshold: float = 0.05) -> list:
 
 
 def get_latest_keywords():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute('SELECT high_kw, medium_kw, low_kw, context_note, generated_at FROM keyword_cache ORDER BY id DESC LIMIT 1')
-    row = cur.fetchone()
-    conn.close()
+    with _lock:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT high_kw, medium_kw, low_kw, context_note, generated_at FROM keyword_cache ORDER BY id DESC LIMIT 1')
+        row = cur.fetchone()
+        conn.close()
     if not row:
         return None
     try:
