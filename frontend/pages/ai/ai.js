@@ -27,7 +27,7 @@ function _aiRenderWelcome() {
   const messages = document.getElementById('ai-chat-messages')
   if (!messages) return
   messages.innerHTML = ''
-  _aiAppendMsg('ai', `Hi. I\'m connected to your live news feed.\n\nYou can ask me:\n\u2022 "What\'s moving markets today?"\n\u2022 "Summarise the NVDA news"\n\u2022 "Is the macro backdrop bullish or bearish?"\n\u2022 "What sectors are getting hit?"\n\nContext window is adjustable above.`)
+  _aiAppendMsg('ai', `Hi. I'm connected to your live news feed.\n\nYou can ask me:\n\u2022 "What's moving markets today?"\n\u2022 "Summarise the NVDA news"\n\u2022 "Is the macro backdrop bullish or bearish?"\n\u2022 "What sectors are getting hit?"\n\nContext window is adjustable above.`)
 }
 
 async function _aiSend() {
@@ -61,14 +61,17 @@ async function _aiSend() {
   }
 }
 
+// Escape HTML entities first, then convert newlines to <br> so line breaks
+// render correctly inside innerHTML without opening XSS vectors.
 function _aiAppendMsg(role, text) {
   const messages = document.getElementById('ai-chat-messages')
   if (!messages) return
   const div = document.createElement('div')
   div.className = `ai-msg ai-msg--${role}`
   const now = new Date().toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' })
+  const escaped = _aiEsc(text).replace(/\n/g, '<br>')
   div.innerHTML = `
-    <div class="ai-bubble">${_aiEsc(text)}</div>
+    <div class="ai-bubble">${escaped}</div>
     <div class="ai-meta">${now}</div>
   `
   messages.appendChild(div)
@@ -100,14 +103,25 @@ function _aiRemoveThinking(id) {
 async function _aiLoadBrief(forceRegenerate = false) {
   const wrap = document.getElementById('ai-brief-wrap')
   if (!wrap) return
-  wrap.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px;"><div class="spinner"></div> Loading brief...</div>'
+
+  if (forceRegenerate) {
+    wrap.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:12px;padding:8px 0;">
+        <div class="spinner"></div> Generating with Ollama...
+      </div>`
+  } else {
+    wrap.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px;"><div class="spinner"></div> Loading brief...</div>'
+  }
+
   try {
     const brief = forceRegenerate
       ? await _aiTriggerRegenerate()
       : await apiAiPremarketBrief()
 
-    if (!brief || !brief.market_bias) {
-      wrap.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No brief yet. Click Regenerate or wait for 07:00 UTC.</div>'
+    // Show error state if Ollama is offline or response is empty
+    if (!brief || brief.error || !brief.market_bias) {
+      const errText = (brief && brief.error) ? brief.error : 'Ollama offline \u2014 start Ollama and set model in Synchro.'
+      wrap.innerHTML = `<div class="notification notification--error">&#9888; ${_aiEsc(errText)}</div>`
       return
     }
 
@@ -116,22 +130,22 @@ async function _aiLoadBrief(forceRegenerate = false) {
 
     const sections = [
       { label: 'Market Bias', val: `<span class="badge ${biasClass}">${brief.market_bias}</span>` },
-      { label: 'Rationale',   val: brief.bias_rationale || '--' },
-      { label: 'Key Events',  val: (brief.key_events_today || []).join(', ') || 'None' },
-      { label: 'Sectors',     val: (brief.sectors_to_watch || []).join(', ') || 'None' },
+      { label: 'Rationale',   val: _aiEsc(brief.bias_rationale || '--') },
+      { label: 'Key Events',  val: _aiEsc((brief.key_events_today || []).join(', ') || 'None') },
+      { label: 'Sectors',     val: _aiEsc((brief.sectors_to_watch || []).join(', ') || 'None') },
       {
         label: 'Top Catalysts',
         val: (brief.top_catalysts || []).slice(0,4)
-          .map(c => `<span class="ticker-chip">${c.ticker}</span> ${_aiEsc(c.headline || '')} <span class="badge badge--${(c.impact||'').toLowerCase()}">${c.impact||''}</span>`)
+          .map(c => `<span class="ticker-chip">${_aiEsc(c.ticker || '')}</span> ${_aiEsc(c.headline || '')} <span class="badge badge--${(c.impact||'').toLowerCase()}">${_aiEsc(c.impact||'')}</span>`)
           .join('<br>')
       },
       {
         label: 'Watch',
         val: (brief.tickers_to_watch || []).map(t =>
-          `<span class="ticker-chip">${t.ticker}</span>`
+          `<span class="ticker-chip">${_aiEsc(t.ticker || t || '')}</span>`
         ).join(' ')
       },
-      { label: 'Generated',   val: brief.generated_at ? new Date(brief.generated_at).toLocaleTimeString('de-DE') : '--' },
+      { label: 'Generated', val: brief.generated_at ? new Date(brief.generated_at).toLocaleTimeString('de-DE') : '--' },
     ]
 
     wrap.innerHTML = sections.map(s => `
@@ -141,15 +155,23 @@ async function _aiLoadBrief(forceRegenerate = false) {
       </div>`).join('')
 
   } catch (e) {
-    wrap.innerHTML = `<div class="notification notification--error">Brief error: ${e.message}</div>`
+    wrap.innerHTML = `<div class="notification notification--error">&#9888; Brief error: ${_aiEsc(e.message)}</div>`
   }
 }
 
 async function _aiTriggerRegenerate() {
-  // POST to trigger regeneration then poll GET
+  // POST forces backend to bypass cache and regenerate
   try {
-    await fetch('http://localhost:8000/api/ai/premarket-brief', { method: 'POST' }).catch(() => {})
+    const result = await fetch('http://localhost:8000/api/ai/premarket-brief', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    if (result.ok) {
+      return await result.json()
+    }
   } catch (_) {}
+  // Fallback: GET in case POST somehow failed
   return apiAiPremarketBrief()
 }
 
