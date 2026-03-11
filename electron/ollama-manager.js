@@ -31,8 +31,6 @@ function _sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-// Retry a file operation up to `retries` times with `delay` ms between attempts.
-// Handles EBUSY / EPERM that Windows throws when a file is still locked.
 async function _retryFileOp(fn, retries = 10, delay = 500) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -45,6 +43,11 @@ async function _retryFileOp(fn, retries = 10, delay = 500) {
       }
     }
   }
+}
+
+// Silently remove a file — never throws, ignores ENOENT / EBUSY
+function _tryDelete(filePath) {
+  try { fs.unlinkSync(filePath) } catch (_) {}
 }
 
 function _getLatestTag() {
@@ -123,10 +126,18 @@ function downloadBinary(onProgress, onStatus) {
     try {
       if (!fs.existsSync(OLLAMA_DIR)) fs.mkdirSync(OLLAMA_DIR, { recursive: true })
 
+      const tmpPath = OLLAMA_BIN + '.tmp'
+
+      // Always wipe any stale/partial .tmp from a previous interrupted install
+      if (fs.existsSync(tmpPath)) {
+        onStatus('Cleaning up previous incomplete download...')
+        _tryDelete(tmpPath)
+        await _sleep(500) // give Windows a moment to fully release the file handle
+      }
+
       onStatus('Fetching latest Ollama release info...')
       const { url, isInstaller } = await _getBinaryUrl()
       onStatus(`Downloading Ollama (${url.split('/').pop()})...`)
-      const tmpPath = OLLAMA_BIN + '.tmp'
 
       await _streamToFile(url, tmpPath, onProgress)
 
@@ -138,20 +149,16 @@ function downloadBinary(onProgress, onStatus) {
           proc.on('error', rej2)
         })
 
-        // Wait a moment for Windows to fully release the installer file lock
         onStatus('Waiting for installer to release file locks...')
         await _sleep(2000)
 
-        // Delete tmp installer — retry on EBUSY
         await _retryFileOp(() => fs.unlinkSync(tmpPath))
 
-        // Copy ollama.exe from system install location — retry on EBUSY
         const systemBin = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe')
         if (fs.existsSync(systemBin)) {
           onStatus('Copying Ollama binary...')
           await _retryFileOp(() => fs.copyFileSync(systemBin, OLLAMA_BIN))
         } else {
-          // Installer added it to PATH — write a tiny .cmd shim
           fs.writeFileSync(OLLAMA_BIN.replace('.exe', '.cmd'), `@echo off\nollama %*\n`)
         }
       } else {
