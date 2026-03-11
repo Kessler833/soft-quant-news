@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a14;
+    color: #cdd6f4;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    user-select: none;
+    -webkit-app-region: drag;
+  }
+
+  .logo-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 40px;
+  }
+
+  .logo-icon {
+    font-size: 48px;
+    line-height: 1;
+    filter: drop-shadow(0 0 18px rgba(137,180,250,0.5));
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+
+  .logo-title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: #89b4fa;
+    text-shadow: 0 0 24px rgba(137,180,250,0.4);
+  }
+
+  .logo-sub {
+    font-size: 11px;
+    letter-spacing: 0.25em;
+    color: #585b70;
+    text-transform: uppercase;
+  }
+
+  .status-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    width: 320px;
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 2px;
+    background: #1e1e2e;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #89b4fa, #cba6f7);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    box-shadow: 0 0 8px rgba(137,180,250,0.6);
+  }
+
+  .status-text {
+    font-size: 11px;
+    color: #6c7086;
+    letter-spacing: 0.05em;
+    min-height: 16px;
+    transition: color 0.3s;
+  }
+
+  .status-text.ready {
+    color: #a6e3a1;
+  }
+
+  .status-text.error {
+    color: #f38ba8;
+  }
+
+  .dots {
+    display: inline-block;
+    animation: dots 1.4s steps(4, end) infinite;
+  }
+
+  .version {
+    position: fixed;
+    bottom: 18px;
+    right: 22px;
+    font-size: 10px;
+    color: #313244;
+    letter-spacing: 0.08em;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.75; transform: scale(0.96); }
+  }
+
+  @keyframes dots {
+    0%   { content: ''; }
+    25%  { content: '.'; }
+    50%  { content: '..'; }
+    75%  { content: '...'; }
+    100% { content: ''; }
+  }
+</style>
+</head>
+<body>
+
+<div class="logo-wrap">
+  <div class="logo-icon">&#9685;</div>
+  <div class="logo-title">SOFT QUANT</div>
+  <div class="logo-sub">News Intelligence Platform</div>
+</div>
+
+<div class="status-area">
+  <div class="progress-track">
+    <div class="progress-fill" id="prog"></div>
+  </div>
+  <div class="status-text" id="status">Starting backend<span class="dots"></span></div>
+</div>
+
+<div class="version">v0.1.0</div>
+
+<script>
+  // Exposed from main.js via contextBridge
+  if (window.splashAPI) {
+    window.splashAPI.onProgress((pct, msg, state) => {
+      document.getElementById('prog').style.width = pct + '%'
+      const el = document.getElementById('status')
+      el.innerHTML = msg
+      el.className = 'status-text' + (state === 'ready' ? ' ready' : state === 'error' ? ' error' : '')
+    })
+  } else {
+    // Fallback: animate independently if no IPC
+    let p = 0
+    const iv = setInterval(() => {
+      p = Math.min(p + 3, 85)
+      document.getElementById('prog').style.width = p + '%'
+    }, 300)
+  }
+</script>
+
+</body>
+</html>
