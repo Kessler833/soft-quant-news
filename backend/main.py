@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from data import db
-from backend.api import health, feed, analysis, watchlist, prices, calendar, polymarket, websocket
+from backend.api import health, feed, analysis, watchlist, prices, calendar, polymarket, websocket, ai_routes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,11 +45,12 @@ app = FastAPI(title='soft-quant-news', lifespan=lifespan)
 
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
-app.include_router(health.router,     prefix='/api')
-app.include_router(feed.router,       prefix='/api/feed')
-app.include_router(analysis.router,   prefix='/api/analysis')
-app.include_router(watchlist.router,  prefix='/api/watchlist')
-app.include_router(prices.router,     prefix='/api/prices')
-app.include_router(calendar.router,   prefix='/api/calendar')
-app.include_router(polymarket.router, prefix='/api/polymarket')
+app.include_router(health.router,      prefix='/api')
+app.include_router(feed.router,        prefix='/api/feed')
+app.include_router(analysis.router,    prefix='/api/analysis')
+app.include_router(watchlist.router,   prefix='/api/watchlist')
+app.include_router(prices.router,      prefix='/api/prices')
+app.include_router(calendar.router,    prefix='/api/calendar')
+app.include_router(polymarket.router,  prefix='/api/polymarket')
+app.include_router(ai_routes.router,   prefix='/api/ai')
 app.include_router(websocket.router)
