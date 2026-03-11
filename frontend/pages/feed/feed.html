@@ -56,6 +56,41 @@
 
   <div id="feed-raw">
     <div class="panel-header">&#11041; Raw News</div>
+
+    <!-- Ingest Dashboard -->
+    <div id="ingest-dashboard">
+      <div class="idash-row">
+        <span class="idash-label">Next cycle</span>
+        <span id="idash-countdown" class="idash-value idash-countdown">--</span>
+      </div>
+      <div class="idash-row">
+        <span class="idash-label">AI keywords</span>
+        <span id="idash-kw-badge" class="idash-badge">--</span>
+        <span id="idash-kw-age" class="idash-value idash-muted">never</span>
+      </div>
+      <div id="idash-context" class="idash-context"></div>
+      <div class="idash-row" style="margin-top:6px;gap:4px;">
+        <button id="idash-force-btn" class="idash-btn" title="Fetch latest news + refresh AI keywords now">&#8635; Refresh Now</button>
+        <button id="idash-kw-btn" class="idash-btn idash-btn--secondary" title="Show current AI keyword context">&#128269; Keywords</button>
+      </div>
+    </div>
+
+    <!-- AI Keywords panel (hidden by default) -->
+    <div id="idash-kw-panel" style="display:none;">
+      <div class="idash-kw-section">
+        <span class="idash-kw-tier idash-kw-tier--high">HIGH</span>
+        <span id="idash-kw-high" class="idash-kw-list"></span>
+      </div>
+      <div class="idash-kw-section">
+        <span class="idash-kw-tier idash-kw-tier--medium">MED</span>
+        <span id="idash-kw-medium" class="idash-kw-list"></span>
+      </div>
+      <div class="idash-kw-section">
+        <span class="idash-kw-tier idash-kw-tier--low">LOW</span>
+        <span id="idash-kw-low" class="idash-kw-list"></span>
+      </div>
+    </div>
+
     <div id="raw-list" style="flex:1;overflow-y:auto;"></div>
   </div>
 

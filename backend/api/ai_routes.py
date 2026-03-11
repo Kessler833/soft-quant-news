@@ -1,306 +1,232 @@
 import json
 import logging
-import asyncio
-from datetime import datetime, timezone, timedelta
+import re
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
 from data import config, db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_OFFLINE_MSG = 'Ollama offline — make sure Ollama is running and a model is set in Settings.'
+KEYWORD_CACHE_TTL_MINUTES = 15
 
 
-def _ollama_url() -> str:
-    return config.get('ollama_url', 'http://localhost:11434').rstrip('/')
+def _strip_json(raw: str) -> str:
+    raw = raw.strip()
+    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = re.sub(r'\s*```$', '', raw)
+    return raw.strip()
 
 
-def _ollama_model() -> str:
-    return config.get('ollama_model', 'gemma3:4b')
-
-
-# ── Warm-up / readiness check ─────────────────────────────────────────────────
-
-async def _ollama_ready(timeout: int = 5) -> bool:
-    """Return True if Ollama is reachable and has at least one model loaded."""
+async def _ensure_ollama_ready(url: str, model: str) -> bool:
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(_ollama_url() + '/api/tags')
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f'{url}/api/tags')
             if r.status_code != 200:
                 return False
-            models = r.json().get('models', [])
-            return len(models) > 0
+            models = [m['name'] for m in r.json().get('models', [])]
+            return any(m == model or m.startswith(model + ':') for m in models)
     except Exception:
         return False
 
 
-async def _ensure_ollama_ready(retries: int = 3, delay: float = 2.0) -> bool:
-    """Try a few times before giving up — Ollama may still be loading."""
-    for _ in range(retries):
-        if await _ollama_ready():
-            return True
-        await asyncio.sleep(delay)
-    return False
-
-
-# ── Core generate call with retry ─────────────────────────────────────────────
-
-async def _ollama_generate(prompt: str, retries: int = 2) -> str:
-    last_err = None
-    for attempt in range(retries + 1):
+async def _ollama_generate(prompt: str, url: str, model: str) -> Optional[str]:
+    """Call Ollama /api/generate with retries. Returns raw text or None."""
+    for attempt in range(3):
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=90) as client:
                 r = await client.post(
-                    _ollama_url() + '/api/generate',
-                    json={'model': _ollama_model(), 'prompt': prompt, 'stream': False},
+                    f'{url}/api/generate',
+                    json={'model': model, 'prompt': prompt, 'stream': False},
                 )
                 r.raise_for_status()
                 return r.json().get('response', '')
         except Exception as e:
-            last_err = e
-            if attempt < retries:
-                await asyncio.sleep(3)
-    raise last_err
+            logger.warning(f'[ai] Ollama attempt {attempt + 1}/3: {e}')
+    return None
 
 
-# ── JSON fence stripping ──────────────────────────────────────────────────────
+# ── Keyword context refresh (called by scheduler every 15 min) ────────────────
 
-def _strip_fences(text: str) -> str:
-    """Strip markdown code fences and return the raw JSON string."""
-    text = text.strip()
-    # Remove opening fence (```json or ```)
-    if text.startswith('```'):
-        text = text[3:]
-        if text.startswith('json'):
-            text = text[4:]
-        text = text.lstrip('\n')
-    # Remove closing fence
-    if text.endswith('```'):
-        text = text[:-3]
-    return text.strip()
+async def refresh_keywords() -> dict:
+    """Ask Ollama to analyse recent headlines and return context-aware keywords.
+    Saves result to keyword_cache table. Returns the keyword dict."""
+    url   = config.get('ollama_url',   'http://localhost:11434').rstrip('/')
+    model = config.get('ollama_model', 'phi4-mini')
 
+    if not await _ensure_ollama_ready(url, model):
+        logger.warning('[ai] refresh_keywords: Ollama not ready, skipping.')
+        return {}
 
-# ── Cache helpers ─────────────────────────────────────────────────────────────
+    # Get recent headlines to give Ollama context about what is happening NOW
+    recent = db.get_articles_since(hours=2)
+    headlines = [a.get('title', '') for a in recent[:40] if a.get('title')]
+    headlines_text = '\n'.join(f'- {h}' for h in headlines) if headlines else '(no recent headlines yet)'
 
-def _cache_fresh(key: str, max_age_minutes: int) -> dict | None:
-    raw = db.get_ai_cache(key)
+    prompt = f"""You are a financial news scoring assistant for a US equity day-trading platform.
+Below are up to 40 recent market news headlines from the last 2 hours.
+
+Based on these headlines, identify the currently most market-moving topics and keywords.
+Return ONLY a compact JSON object — no explanation, no markdown:
+{{
+  "high_kw":    ["keyword1", "keyword2", ...],   // 5-12 words/phrases, HIGH relevance right now
+  "medium_kw":  ["keyword1", "keyword2", ...],   // 5-12 words/phrases, MEDIUM relevance
+  "low_kw":     ["keyword1", "keyword2", ...],   // 3-8 words/phrases, LOW relevance
+  "context_note": "One-sentence summary of current market regime (e.g. risk-off, rate fears, earnings season)"
+}}
+
+Guidelines:
+- Focus on what is CURRENTLY driving price action today, not general evergreen terms.
+- Do NOT include generic words already obvious from any day (e.g. 'stock', 'market', 'company').
+- Prefer specific topics visible in the headlines: tickers, events, macro catalysts, geopolitical themes.
+- All keywords lowercase.
+
+Recent headlines:
+{headlines_text}
+
+JSON only:"""
+
+    raw = await _ollama_generate(prompt, url, model)
     if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-        gen  = data.get('generated_at')
-        if not gen:
-            return None
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(gen)).total_seconds() / 60
-        return data if age < max_age_minutes else None
-    except Exception:
-        return None
-
-
-def _article_lines(articles: list, limit: int = 20) -> str:
-    lines = []
-    for a in articles[:limit]:
-        rel   = a.get('relevance', 'LOW')
-        sent  = a.get('sentiment', 'Neutral')
-        title = a.get('title', '')
-        lines.append(f'[{rel}][{sent}] {title}')
-    return '\n'.join(lines)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-# ── GET /premarket-brief ──────────────────────────────────────────────────────
-
-async def _build_premarket_brief() -> dict:
-    if not await _ensure_ollama_ready():
-        return {
-            'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
-            'market_bias': 'Neutral', 'bias_rationale': _OFFLINE_MSG,
-            'tickers_to_watch': [], 'generated_at': _now_iso(), 'error': _OFFLINE_MSG,
-        }
-
-    articles = db.get_articles_since(hours=4)
-    if not articles:
-        return {
-            'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
-            'market_bias': 'Neutral', 'bias_rationale': 'No recent articles available.',
-            'tickers_to_watch': [], 'generated_at': _now_iso(),
-        }
-
-    context = _article_lines(articles, limit=30)
-    prompt = f"""You are a professional equity market analyst. Based on the following recent news headlines, produce a pre-market brief.
-
-Headlines (format: [RELEVANCE][SENTIMENT] title):
-{context}
-
-Respond ONLY with valid JSON matching this exact schema (no markdown, no explanation):
-{{
-  "market_bias": "Bullish" | "Bearish" | "Neutral",
-  "bias_rationale": "<1-2 sentence rationale>",
-  "key_events_today": ["<event>", ...],
-  "sectors_to_watch": ["<sector>", ...],
-  "top_catalysts": [
-    {{"ticker": "<TICKER or MACRO>", "headline": "<short headline>", "impact": "HIGH" | "MEDIUM" | "LOW"}}
-  ],
-  "tickers_to_watch": [
-    {{"ticker": "<TICKER>"}}
-  ]
-}}"""
+        logger.warning('[ai] refresh_keywords: no response from Ollama.')
+        return {}
 
     try:
-        text = _strip_fences(await _ollama_generate(prompt))
-        data = json.loads(text)
-        data['generated_at'] = _now_iso()
-        db.set_ai_cache('premarket-brief', json.dumps(data))
-        return data
+        data = json.loads(_strip_json(raw))
+        high   = [str(k).lower() for k in data.get('high_kw',   []) if k]
+        medium = [str(k).lower() for k in data.get('medium_kw', []) if k]
+        low    = [str(k).lower() for k in data.get('low_kw',    []) if k]
+        note   = str(data.get('context_note', ''))
+        db.save_keywords(high, medium, low, note)
+        logger.info(f'[ai] Keywords refreshed: {len(high)}H/{len(medium)}M/{len(low)}L | {note}')
+        return {'high_kw': high, 'medium_kw': medium, 'low_kw': low, 'context_note': note}
     except Exception as e:
-        logger.warning(f'[ai] premarket-brief error: {e}')
-        return {
-            'top_catalysts': [], 'key_events_today': [], 'sectors_to_watch': [],
-            'market_bias': 'Neutral', 'bias_rationale': _OFFLINE_MSG,
-            'tickers_to_watch': [], 'generated_at': _now_iso(), 'error': str(e),
-        }
+        logger.warning(f'[ai] refresh_keywords JSON parse failed: {e} | raw={raw[:200]}')
+        return {}
 
 
-@router.get('/premarket-brief')
-async def get_premarket_brief():
-    cached = _cache_fresh('premarket-brief', max_age_minutes=30)
-    if cached:
-        return cached
-    return await _build_premarket_brief()
+# ── HTTP endpoints ────────────────────────────────────────────────────────────
+
+@router.post('/keyword-context')
+async def post_keyword_context():
+    """Manually trigger an immediate keyword refresh and return the result."""
+    result = await refresh_keywords()
+    if not result:
+        return JSONResponse({'error': 'Keyword refresh failed — check Ollama status'}, status_code=503)
+    return result
 
 
-@router.post('/premarket-brief')
-async def post_premarket_brief():
-    return await _build_premarket_brief()
-
-
-# ── GET /macro-narrative ──────────────────────────────────────────────────────
-
-@router.get('/macro-narrative')
-async def get_macro_narrative():
-    cached = _cache_fresh('macro-narrative', max_age_minutes=60)
-    if cached:
-        return cached
-
-    if not await _ensure_ollama_ready():
-        return {'narrative': _OFFLINE_MSG, 'regime': 'NEUTRAL', 'generated_at': _now_iso(), 'error': _OFFLINE_MSG}
-
-    articles = db.get_articles_since(hours=8)
-    if not articles:
-        return {'narrative': 'No recent data.', 'regime': 'NEUTRAL', 'generated_at': _now_iso()}
-
-    context = _article_lines(articles, limit=40)
-    prompt = f"""You are a macro strategist. Based on the recent news below, determine the current macro regime.
-
-Headlines:
-{context}
-
-Respond ONLY with valid JSON (no markdown):
-{{
-  "regime": "RISK_ON" | "RISK_OFF" | "NEUTRAL",
-  "narrative": "<2-4 sentence macro narrative>"
-}}"""
-
-    try:
-        text = _strip_fences(await _ollama_generate(prompt))
-        data = json.loads(text)
-        data['generated_at'] = _now_iso()
-        db.set_ai_cache('macro-narrative', json.dumps(data))
-        return data
-    except Exception as e:
-        logger.warning(f'[ai] macro-narrative error: {e}')
-        return {'narrative': _OFFLINE_MSG, 'regime': 'NEUTRAL', 'generated_at': _now_iso(), 'error': str(e)}
-
-
-# ── POST /chat ────────────────────────────────────────────────────────────────
-
-class ChatRequest(BaseModel):
-    question: str
-    context_hours: int = 4
+@router.get('/keyword-context')
+async def get_keyword_context():
+    """Return the latest cached keyword context without triggering a refresh."""
+    kw = db.get_latest_keywords()
+    if not kw:
+        return JSONResponse({'error': 'No keyword context yet — trigger a refresh first'}, status_code=404)
+    return kw
 
 
 @router.post('/chat')
-async def ai_chat(body: ChatRequest):
-    if not await _ensure_ollama_ready():
-        return {'answer': _OFFLINE_MSG, 'sources_used': 0, 'error': _OFFLINE_MSG}
+async def chat(payload: dict):
+    url   = config.get('ollama_url',   'http://localhost:11434').rstrip('/')
+    model = config.get('ollama_model', 'phi4-mini')
 
-    articles = db.get_articles_since(hours=body.context_hours)
-    context  = _article_lines(articles, limit=20)
-    sources_used = min(len(articles), 20)
+    if not await _ensure_ollama_ready(url, model):
+        return JSONResponse({'error': 'Ollama not ready'}, status_code=503)
 
-    if not articles:
-        return {'answer': 'No recent news articles available to answer your question.', 'sources_used': 0}
+    recent   = db.get_articles_since(hours=4)
+    context  = '\n'.join(f"- [{a.get('relevance')}] {a.get('title','')}" for a in recent[:20])
+    question = payload.get('message', '')
 
-    prompt = f"""You are a financial news assistant. Answer the user's question using ONLY the news context provided. Be concise and direct.
+    kw = db.get_latest_keywords()
+    regime_note = f"\nCurrent market regime: {kw['context_note']}" if kw and kw.get('context_note') else ''
 
-News context (last {body.context_hours}h, format: [RELEVANCE][SENTIMENT] title):
+    prompt = f"""You are a concise financial news analyst for a US equity day-trading platform.{regime_note}
+Recent headlines (last 4h):
 {context}
 
-User question: {body.question}
+User: {question}
+Assistant:"""
 
-Answer:"""
-
-    try:
-        answer = await _ollama_generate(prompt)
-        return {'answer': answer.strip(), 'sources_used': sources_used}
-    except Exception as e:
-        logger.warning(f'[ai] chat error: {e}')
-        return {'answer': _OFFLINE_MSG, 'sources_used': 0, 'error': str(e)}
+    response = await _ollama_generate(prompt, url, model)
+    if response is None:
+        return JSONResponse({'error': 'Ollama generate failed after 3 attempts'}, status_code=503)
+    return {'response': response}
 
 
-# ── POST /bull-bear ───────────────────────────────────────────────────────────
+@router.post('/premarket-brief')
+async def premarket_brief():
+    url   = config.get('ollama_url',   'http://localhost:11434').rstrip('/')
+    model = config.get('ollama_model', 'phi4-mini')
 
-class BullBearRequest(BaseModel):
-    ticker: str
+    if not await _ensure_ollama_ready(url, model):
+        return JSONResponse({'error': 'Ollama not ready'}, status_code=503)
+
+    articles = db.get_articles_since(hours=12)
+    if not articles:
+        return {'brief': 'No articles available for briefing.'}
+
+    headlines = '\n'.join(f"- [{a.get('relevance')}][{a.get('sentiment')}] {a.get('title','')}" for a in articles[:30])
+    kw = db.get_latest_keywords()
+    regime_note = f"\nCurrent market regime: {kw['context_note']}" if kw and kw.get('context_note') else ''
+
+    prompt = f"""You are a financial analyst. Write a concise pre-market briefing (max 150 words) for a US equity day trader.{regime_note}
+Recent news headlines:
+{headlines}
+
+Brief:"""
+
+    response = await _ollama_generate(prompt, url, model)
+    if response is None:
+        return JSONResponse({'error': 'Ollama generate failed'}, status_code=503)
+    return {'brief': response}
+
+
+@router.get('/macro-narrative')
+async def macro_narrative():
+    url   = config.get('ollama_url',   'http://localhost:11434').rstrip('/')
+    model = config.get('ollama_model', 'phi4-mini')
+
+    if not await _ensure_ollama_ready(url, model):
+        return JSONResponse({'error': 'Ollama not ready'}, status_code=503)
+
+    articles = db.get_articles_since(hours=6)
+    if not articles:
+        return {'narrative': 'No data available.'}
+
+    headlines = '\n'.join(f"- {a.get('title','')}" for a in articles[:25])
+    prompt = f"""Summarise the macro market narrative in 2-3 sentences based on these headlines:\n{headlines}\n\nNarrative:"""
+
+    response = await _ollama_generate(prompt, url, model)
+    if response is None:
+        return JSONResponse({'error': 'Ollama generate failed'}, status_code=503)
+    return {'narrative': response}
 
 
 @router.post('/bull-bear')
-async def ai_bull_bear(body: BullBearRequest):
-    ticker = body.ticker.upper()
+async def bull_bear(payload: dict):
+    url   = config.get('ollama_url',   'http://localhost:11434').rstrip('/')
+    model = config.get('ollama_model', 'phi4-mini')
+    ticker = payload.get('ticker', 'SPY').upper()
 
-    if not await _ensure_ollama_ready():
-        return {
-            'ticker': ticker, 'bull_case': [], 'bear_case': [],
-            'overall_lean': 'Neutral', 'confidence': 'Low', 'error': _OFFLINE_MSG,
-        }
+    if not await _ensure_ollama_ready(url, model):
+        return JSONResponse({'error': 'Ollama not ready'}, status_code=503)
 
     articles = db.get_articles_for_ticker(ticker)
     if not articles:
-        return {
-            'ticker': ticker, 'bull_case': [], 'bear_case': [],
-            'overall_lean': 'Neutral', 'confidence': 'Low',
-            'error': f'No recent news found for {ticker}.',
-        }
+        return {'bull': 'No data.', 'bear': 'No data.'}
 
-    context = _article_lines(articles, limit=20)
-    prompt = f"""You are an equity analyst. Based only on the news headlines below for {ticker}, produce a bull/bear analysis.
+    headlines = '\n'.join(f"- [{a.get('sentiment')}] {a.get('title','')}" for a in articles[:20])
+    prompt = f"""For the ticker {ticker}, list 2-3 bull case points and 2-3 bear case points based on these headlines (be concise):\n{headlines}\n\nBull:\n"""
 
-Headlines:
-{context}
+    response = await _ollama_generate(prompt, url, model)
+    if response is None:
+        return JSONResponse({'error': 'Ollama generate failed'}, status_code=503)
 
-Respond ONLY with valid JSON (no markdown):
-{{
-  "bull_case": ["<bullet point>", ...],
-  "bear_case": ["<bullet point>", ...],
-  "overall_lean": "Bullish" | "Bearish" | "Neutral",
-  "confidence": "High" | "Medium" | "Low"
-}}"""
-
-    try:
-        text = _strip_fences(await _ollama_generate(prompt))
-        data = json.loads(text)
-        data['ticker'] = ticker
-        return data
-    except Exception as e:
-        logger.warning(f'[ai] bull-bear error: {e}')
-        return {
-            'ticker': ticker, 'bull_case': [], 'bear_case': [],
-            'overall_lean': 'Neutral', 'confidence': 'Low', 'error': str(e),
-        }
+    parts  = response.split('Bear:')
+    bull_t = parts[0].replace('Bull:', '').strip() if parts else response
+    bear_t = parts[1].strip() if len(parts) > 1 else ''
+    return {'bull': bull_t, 'bear': bear_t}

@@ -6,7 +6,10 @@ let _feedSoundOn     = true
 let _feedAudioCtx    = null
 let _feedStatusEs    = null
 let _feedRawEs       = null
-let _feedFilterTimer = null   // BUG 6: debounce for dropdown filter changes
+let _feedFilterTimer = null
+let _idashTimer      = null
+let _idashNextIn     = 0
+let _idashKwVisible  = false
 
 function _feedGetFilters() {
   return {
@@ -67,14 +70,16 @@ function _feedShowStatus(msg) {
   if (spinner) spinner.style.display = (phase === 'done' || phase === 'idle') ? 'none' : 'inline-block'
 }
 
-// BUG 1 FIX: onerror now closes and reschedules reconnect after 5 s
 function _feedConnectStatusStream() {
   if (_feedStatusEs) { try { _feedStatusEs.close() } catch (_) {} }
   try {
     _feedStatusEs = new EventSource('http://localhost:8000/api/feed/ingest-status')
     _feedStatusEs.onmessage = (e) => {
       _feedShowStatus(e.data)
-      if (e.data.startsWith('done:')) setTimeout(_feedMergeLatest, 500)
+      if (e.data.startsWith('done:')) {
+        setTimeout(_feedMergeLatest, 500)
+        setTimeout(_idashRefreshStatus, 800)   // refresh dashboard after ingest
+      }
     }
     _feedStatusEs.onerror = () => {
       _feedStatusEs.close()
@@ -85,7 +90,6 @@ function _feedConnectStatusStream() {
 
 // ── Raw News Panel ────────────────────────────────────────────────────────────────
 
-// BUG 1 FIX: same reconnect pattern for raw stream
 function _feedConnectRawStream() {
   if (_feedRawEs) { try { _feedRawEs.close() } catch (_) {} }
   try {
@@ -120,13 +124,113 @@ function _feedPrependRaw(article) {
   while (list.children.length > 300) list.removeChild(list.lastChild)
 }
 
+// ── Ingest Dashboard ─────────────────────────────────────────────────────────────
+
+async function _idashRefreshStatus() {
+  try {
+    const r = await fetch('http://localhost:8000/api/feed/cycle-status')
+    if (!r.ok) return
+    const d = await r.json()
+
+    // Countdown
+    _idashNextIn = Math.max(0, d.next_in_seconds || 0)
+    _idashUpdateCountdown()
+
+    // Keyword badge
+    const badge = document.getElementById('idash-kw-badge')
+    const age   = document.getElementById('idash-kw-age')
+    const ctx   = document.getElementById('idash-context')
+    if (badge) {
+      const kc = d.keyword_count || {}
+      badge.textContent = `${kc.high||0}H/${kc.medium||0}M/${kc.low||0}L`
+      badge.className   = 'idash-badge' + ((kc.high||0) > 0 ? ' idash-badge--active' : '')
+    }
+    if (age && d.keyword_generated_at) {
+      age.textContent = _feedRelTime(d.keyword_generated_at)
+    } else if (age) {
+      age.textContent = 'never'
+    }
+    if (ctx) ctx.textContent = d.context_note || ''
+  } catch (e) {
+    console.warn('[idash] status fetch failed:', e)
+  }
+}
+
+function _idashUpdateCountdown() {
+  const el = document.getElementById('idash-countdown')
+  if (!el) return
+  if (_idashNextIn <= 0) {
+    el.textContent = 'now'
+    el.style.color = 'var(--accent-green)'
+  } else {
+    el.textContent = `${_idashNextIn}s`
+    const pct = _idashNextIn / 60
+    el.style.color = pct > 0.5 ? 'var(--accent-green)' : pct > 0.2 ? 'var(--accent-orange)' : 'var(--accent-red)'
+  }
+}
+
+function _idashStartTick() {
+  if (_idashTimer) clearInterval(_idashTimer)
+  _idashTimer = setInterval(() => {
+    if (_idashNextIn > 0) {
+      _idashNextIn--
+      _idashUpdateCountdown()
+    }
+  }, 1000)
+  // Re-fetch actual server state every 30s to stay in sync
+  setInterval(_idashRefreshStatus, 30000)
+}
+
+async function _idashForceRefresh() {
+  const btn = document.getElementById('idash-force-btn')
+  if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing...' }
+  try {
+    await fetch('http://localhost:8000/api/feed/force-ingest', { method: 'POST' })
+    setTimeout(_idashRefreshStatus, 2000)
+  } catch (e) {
+    console.warn('[idash] force ingest failed:', e)
+  } finally {
+    if (btn) {
+      setTimeout(() => { btn.disabled = false; btn.textContent = '\u21bb Refresh Now' }, 3000)
+    }
+  }
+}
+
+async function _idashToggleKeywords() {
+  _idashKwVisible = !_idashKwVisible
+  const panel = document.getElementById('idash-kw-panel')
+  const btn   = document.getElementById('idash-kw-btn')
+  if (!panel) return
+  if (!_idashKwVisible) {
+    panel.style.display = 'none'
+    if (btn) btn.textContent = '\uD83D\uDD0D Keywords'
+    return
+  }
+  panel.style.display = 'block'
+  if (btn) btn.textContent = '\u25B2 Hide'
+  try {
+    const r = await fetch('http://localhost:8000/api/ai/keyword-context')
+    if (!r.ok) {
+      document.getElementById('idash-kw-high').textContent   = '—'
+      document.getElementById('idash-kw-medium').textContent = '—'
+      document.getElementById('idash-kw-low').textContent    = '—'
+      return
+    }
+    const d = await r.json()
+    const fmt = (arr) => (arr && arr.length) ? arr.join(', ') : '—'
+    document.getElementById('idash-kw-high').textContent   = fmt(d.high_kw)
+    document.getElementById('idash-kw-medium').textContent = fmt(d.medium_kw)
+    document.getElementById('idash-kw-low').textContent    = fmt(d.low_kw)
+  } catch (e) {
+    console.warn('[idash] keyword fetch failed:', e)
+  }
+}
+
 // ── Sound ──────────────────────────────────────────────────────────────────────────────
 
-// BUG 3 FIX: AudioContext is created and resumed via the sound toggle click,
-// which is a direct user gesture. _feedPlaySound() reuses the existing ctx.
 function _feedPlaySound(relevance) {
   if (!_feedSoundOn) return
-  if (!_feedAudioCtx) return   // ctx only created after user gesture via sound btn
+  if (!_feedAudioCtx) return
   try {
     const ctx  = _feedAudioCtx
     const osc  = ctx.createOscillator()
@@ -143,7 +247,7 @@ function _feedPlaySound(relevance) {
   } catch (_) {}
 }
 
-// ── Card builder ─────────────────────────────────────────────────────────────────
+// ── Card builder ─────────────────────────────────────────────────────────────
 
 function _feedBuildCard(a, withChartBtn = true) {
   const rel     = (a.relevance || 'low').toLowerCase()
@@ -175,7 +279,6 @@ function _feedBuildCard(a, withChartBtn = true) {
       <span class="news-card__time">${_feedRelTime(a.published_at)}</span>
     </div>`
 
-  // BUG 4 FIX: ticker chips click → set filter-ticker and re-render
   card.querySelectorAll('.ticker-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       const tickerInput = document.getElementById('filter-ticker')
@@ -232,7 +335,6 @@ function _feedConnectWs() {
 
 // ── Load & render ─────────────────────────────────────────────────────────────────
 
-// BUG 6 FIX: shared debounce helper used by both ticker input and dropdowns
 function _feedDebouncedLoad() {
   clearTimeout(_feedFilterTimer)
   _feedFilterTimer = setTimeout(_feedLoadAndRender, 150)
@@ -261,8 +363,6 @@ async function _feedLoadAndRender() {
   }
 }
 
-// BUG 2 FIX: only treat the list as empty when it has no data-id children,
-// not whenever any spinner exists anywhere in the list.
 async function _feedMergeLatest() {
   const list = document.getElementById('feed-list')
   if (!list) return
@@ -276,7 +376,6 @@ async function _feedMergeLatest() {
     const articles = await apiFeedLatest(params)
     if (!articles || articles.length === 0) return
 
-    // isEmpty = no children at all, OR the sole child is a loading placeholder
     const isEmpty = list.children.length === 0 ||
       (list.children.length === 1 &&
        list.children[0].querySelector('.spinner') &&
@@ -351,7 +450,6 @@ async function _feedOpenChart(ticker) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────────────
 
-// BUG 5 FIX: return 'Unknown' instead of '' for missing/invalid dates
 function _feedRelTime(iso) {
   if (!iso) return 'Unknown'
   try {
@@ -389,19 +487,15 @@ async function initFeed() {
   await _feedLoadAndRender()
   _feedConnectWs()
 
-  // BUG 6 FIX: all three dropdowns share 150ms debounce, same as ticker
   ;['filter-relevance', 'filter-sentiment', 'filter-catalyst'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', _feedDebouncedLoad)
   })
   document.getElementById('filter-ticker')?.addEventListener('input', _feedDebouncedLoad)
 
-  // BUG 3 FIX: AudioContext created and resumed on the sound toggle click
-  // (direct user gesture) so browsers allow it immediately.
   const soundBtn = document.getElementById('sound-toggle')
   if (soundBtn) {
     soundBtn.addEventListener('click', () => {
       _feedSoundOn = !_feedSoundOn
-      // Create context on first click; resume on every subsequent click
       if (!_feedAudioCtx) {
         _feedAudioCtx = new (window.AudioContext || window.webkitAudioContext)()
       }
@@ -418,4 +512,10 @@ async function initFeed() {
     if (e.target === document.getElementById('feed-chart-modal'))
       document.getElementById('feed-chart-modal').classList.remove('open')
   })
+
+  // Ingest dashboard
+  document.getElementById('idash-force-btn')?.addEventListener('click', _idashForceRefresh)
+  document.getElementById('idash-kw-btn')?.addEventListener('click', _idashToggleKeywords)
+  await _idashRefreshStatus()
+  _idashStartTick()
 }

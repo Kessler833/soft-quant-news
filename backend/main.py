@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 DEFAULT_MODEL = 'phi4-mini'
+KEYWORD_REFRESH_INTERVAL = 15 * 60   # 15 minutes in seconds
+INGEST_INTERVAL          = 60        # Finnhub poll every 60 seconds
 
 
 async def _ensure_model_pulled(model: str = DEFAULT_MODEL) -> None:
-    """Pull the model via Ollama if it is not already present locally."""
     url = config.get('ollama_url', 'http://localhost:11434').rstrip('/')
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -34,7 +35,7 @@ async def _ensure_model_pulled(model: str = DEFAULT_MODEL) -> None:
                     logger.info(f'[main] Model "{model}" already installed, skipping pull.')
                     return
 
-        logger.info(f'[main] Model "{model}" not found — pulling now (this may take a few minutes)...')
+        logger.info(f'[main] Model "{model}" not found \u2014 pulling now (this may take a few minutes)...')
         async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream(
                 'POST',
@@ -52,8 +53,7 @@ async def _ensure_model_pulled(model: str = DEFAULT_MODEL) -> None:
 
 
 async def _warm_model(model: str = DEFAULT_MODEL) -> None:
-    """Send a minimal generate request so Ollama loads the model weights into RAM.
-    This eliminates the cold-start delay on the first real user request."""
+    """Send a minimal generate request so Ollama loads the model weights into RAM."""
     url = config.get('ollama_url', 'http://localhost:11434').rstrip('/')
     logger.info(f'[main] Pre-warming model "{model}" into RAM...')
     try:
@@ -75,9 +75,14 @@ async def lifespan(application: FastAPI):
 
     from backend.api.feed import ingest_all_sources
     from backend.api.polymarket import update_polymarket
+    from backend.api.ai_routes import refresh_keywords
 
-    scheduler.add_job(ingest_all_sources, 'interval', seconds=60,  id='ingest_all_sources')
-    scheduler.add_job(update_polymarket,  'interval', seconds=300, id='update_polymarket')
+    # Finnhub: every 60 seconds
+    scheduler.add_job(ingest_all_sources, 'interval', seconds=INGEST_INTERVAL,         id='ingest_all_sources')
+    # Polymarket: every 5 minutes
+    scheduler.add_job(update_polymarket,  'interval', seconds=300,                      id='update_polymarket')
+    # AI keyword refresh: every 15 minutes
+    scheduler.add_job(refresh_keywords,   'interval', seconds=KEYWORD_REFRESH_INTERVAL, id='refresh_keywords')
     scheduler.start()
     logger.info('[main] Scheduler started.')
 
@@ -88,9 +93,13 @@ async def lifespan(application: FastAPI):
         await _ensure_model_pulled(model)
         # 2. Pre-warm: load model weights into RAM so first user request is instant
         await _warm_model(model)
-        # 3. Remaining startup work
+        # 3. Initial keyword generation so scorer has context from first ingest
+        try: await refresh_keywords()
+        except Exception as e: logger.warning(f'[main] Startup keyword refresh: {e}')
+        # 4. Polymarket
         try: await update_polymarket()
         except Exception as e: logger.warning(f'[main] Startup polymarket: {e}')
+        # 5. First news ingest
         try: await ingest_all_sources()
         except Exception as e: logger.warning(f'[main] Startup ingest: {e}')
 

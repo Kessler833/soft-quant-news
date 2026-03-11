@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from datetime import datetime, timezone, timedelta
@@ -17,7 +18,11 @@ router = APIRouter()
 _status_queues: list = []
 _raw_queues:    list = []
 
-# ── Relevance / sentiment keyword lists ──────────────────────────────────────
+# Tracks when the last ingest ran so the frontend can show a countdown
+_last_ingest_at: Optional[datetime] = None
+INGEST_INTERVAL_SECONDS = 60
+
+# ── Hardcoded always-on HIGH keyword set ──────────────────────────────────────
 
 _BASE_HIGH = [
     'fed ', 'federal reserve', 'fomc', 'rate cut', 'rate hike', 'interest rate',
@@ -57,7 +62,6 @@ _CATALYST_MAP = {
     'Geopolitical': ['war', 'sanction', 'tariff', 'trade', 'china', 'russia', 'iran', 'opec'],
 }
 
-# Regex to extract ticker symbols from headlines (e.g. (AAPL), $TSLA, NYSE:MSFT)
 _TICKER_RE = re.compile(
     r'\b([A-Z]{1,5})\b(?=\s*[,)\]])|'
     r'\(([A-Z]{1,5})\)|'
@@ -83,16 +87,32 @@ def _extract_tickers(text: str) -> list:
     return sorted(found)
 
 
+# ── Hybrid scorer: hardcoded keywords + AI keywords from DB ───────────────────
+
 def rule_score(article: dict) -> dict:
     text = (article.get('title', '') + ' ' + article.get('summary', '')).lower()
 
-    high_hits   = sum(1 for kw in _BASE_HIGH   if kw in text)
-    medium_hits = sum(1 for kw in _BASE_MEDIUM if kw in text)
-    low_hits    = sum(1 for kw in _BASE_LOW    if kw in text)
-    bull_hits   = sum(1 for kw in _BULL_KW     if kw in text)
-    bear_hits   = sum(1 for kw in _BEAR_KW     if kw in text)
+    # Load AI-generated context keywords (may be None if Ollama hasn't run yet)
+    ai_kw = db.get_latest_keywords()
+    ai_high   = [kw.lower() for kw in (ai_kw['high_kw']   if ai_kw else [])]
+    ai_medium = [kw.lower() for kw in (ai_kw['medium_kw'] if ai_kw else [])]
+    ai_low    = [kw.lower() for kw in (ai_kw['low_kw']    if ai_kw else [])]
 
-    if high_hits >= 2:
+    # Combine hardcoded + AI keywords; hardcoded always wins, AI adds on top
+    effective_high   = _BASE_HIGH   + [kw for kw in ai_high   if kw not in _BASE_HIGH]
+    effective_medium = _BASE_MEDIUM + [kw for kw in ai_medium if kw not in _BASE_MEDIUM]
+    effective_low    = _BASE_LOW    + [kw for kw in ai_low    if kw not in _BASE_LOW]
+
+    high_hits   = sum(1 for kw in effective_high   if kw in text)
+    medium_hits = sum(1 for kw in effective_medium if kw in text)
+    low_hits    = sum(1 for kw in effective_low    if kw in text)
+    bull_hits   = sum(1 for kw in _BULL_KW         if kw in text)
+    bear_hits   = sum(1 for kw in _BEAR_KW         if kw in text)
+
+    # AI-only HIGH hit gets a small boost so AI-detected topics score correctly
+    ai_high_hits = sum(1 for kw in ai_high if kw in text)
+
+    if high_hits >= 2 or (high_hits >= 1 and ai_high_hits >= 1):
         relevance = 'HIGH';   impact = min(10, 5 + high_hits * 2)
     elif high_hits == 1 and (medium_hits >= 1 or bull_hits + bear_hits >= 1):
         relevance = 'HIGH';   impact = min(9, 5 + medium_hits)
@@ -114,16 +134,14 @@ def rule_score(article: dict) -> dict:
             catalyst = cat
             break
 
-    # Extract tickers from the original (un-lowercased) title
-    import json as _json
     tickers = _extract_tickers(article.get('title', '') + ' ' + article.get('summary', ''))
 
     return {
-        'relevance': relevance,
-        'sentiment': sentiment,
+        'relevance':    relevance,
+        'sentiment':    sentiment,
         'impact_score': impact,
         'catalyst_type': catalyst,
-        'tickers': _json.dumps(tickers),
+        'tickers':      json.dumps(tickers),
     }
 
 
@@ -140,7 +158,6 @@ def _emit_status(msg: str):
 
 
 def _emit_raw(article: dict):
-    import json
     payload = json.dumps({
         'id':           article.get('id', ''),
         'title':        article.get('title', ''),
@@ -162,8 +179,6 @@ def _emit_raw(article: dict):
 
 @router.get('/ingest-status')
 async def stream_ingest_status():
-    """SSE stream that emits ingest progress messages (fetching / scoring / done)."""
-    import asyncio as _asyncio
     q: asyncio.Queue = asyncio.Queue(maxsize=64)
     _status_queues.append(q)
 
@@ -171,10 +186,9 @@ async def stream_ingest_status():
         try:
             while True:
                 try:
-                    msg = await _asyncio.wait_for(q.get(), timeout=25)
+                    msg = await asyncio.wait_for(q.get(), timeout=25)
                     yield f'data: {msg}\n\n'
-                except _asyncio.TimeoutError:
-                    # keep-alive ping so the connection stays open
+                except asyncio.TimeoutError:
                     yield ': ping\n\n'
         except GeneratorExit:
             pass
@@ -182,20 +196,12 @@ async def stream_ingest_status():
             try: _status_queues.remove(q)
             except ValueError: pass
 
-    return StreamingResponse(
-        _gen(),
-        media_type='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-        },
-    )
+    return StreamingResponse(_gen(), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 @router.get('/raw-stream')
 async def stream_raw_articles():
-    """SSE stream that emits each newly ingested article as a JSON payload."""
-    import asyncio as _asyncio
     q: asyncio.Queue = asyncio.Queue(maxsize=256)
     _raw_queues.append(q)
 
@@ -203,9 +209,9 @@ async def stream_raw_articles():
         try:
             while True:
                 try:
-                    payload = await _asyncio.wait_for(q.get(), timeout=25)
+                    payload = await asyncio.wait_for(q.get(), timeout=25)
                     yield f'data: {payload}\n\n'
-                except _asyncio.TimeoutError:
+                except asyncio.TimeoutError:
                     yield ': ping\n\n'
         except GeneratorExit:
             pass
@@ -213,14 +219,44 @@ async def stream_raw_articles():
             try: _raw_queues.remove(q)
             except ValueError: pass
 
-    return StreamingResponse(
-        _gen(),
-        media_type='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
+    return StreamingResponse(_gen(), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@router.get('/cycle-status')
+async def get_cycle_status():
+    """Returns timing info for the ingest dashboard in the raw panel."""
+    global _last_ingest_at
+    now = datetime.now(timezone.utc)
+    last_iso = _last_ingest_at.isoformat() if _last_ingest_at else None
+    if _last_ingest_at:
+        elapsed  = (now - _last_ingest_at).total_seconds()
+        next_in  = max(0, INGEST_INTERVAL_SECONDS - elapsed)
+    else:
+        next_in  = 0
+
+    ai_kw = db.get_latest_keywords()
+    return {
+        'last_ingest':       last_iso,
+        'next_in_seconds':   round(next_in),
+        'interval_seconds':  INGEST_INTERVAL_SECONDS,
+        'keyword_generated_at': ai_kw['generated_at'] if ai_kw else None,
+        'keyword_count': {
+            'high':   len(ai_kw['high_kw'])   if ai_kw else 0,
+            'medium': len(ai_kw['medium_kw']) if ai_kw else 0,
+            'low':    len(ai_kw['low_kw'])    if ai_kw else 0,
         },
-    )
+        'context_note': ai_kw['context_note'] if ai_kw else '',
+    }
+
+
+@router.post('/force-ingest')
+async def force_ingest():
+    """Trigger an immediate ingest + keyword refresh cycle from the dashboard."""
+    from backend.api.ai_routes import refresh_keywords
+    asyncio.create_task(refresh_keywords())
+    asyncio.create_task(ingest_all_sources())
+    return {'status': 'triggered'}
 
 
 # ── Normalisation / ID ────────────────────────────────────────────────────────
@@ -284,13 +320,9 @@ async def _fetch_finnhub_company(key, ticker):
 # ── Price drift tracking ──────────────────────────────────────────────────────
 
 def _schedule_drift(article_id: str, ticker: str) -> None:
-    """Schedule 3 price-drift snapshots without importing from backend.main."""
     try:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        # Retrieve the running scheduler that main.py started
         import backend.main as _main_mod
         scheduler = _main_mod.scheduler
-
         now = datetime.now(timezone.utc)
         for minutes in [5, 15, 30]:
             run_at = now + timedelta(minutes=minutes)
@@ -323,7 +355,7 @@ async def _track_drift(article_id: str, ticker: str, minutes: int) -> None:
 # ── Main ingest ───────────────────────────────────────────────────────────────
 
 async def ingest_all_sources() -> None:
-    import json
+    global _last_ingest_at
     finnhub_key = config.get('finnhub_key', '')
 
     if not finnhub_key:
@@ -337,17 +369,19 @@ async def ingest_all_sources() -> None:
     for t in watchlist_tickers:
         tasks.append(_fetch_finnhub_company(finnhub_key, t))
 
-    results     = await asyncio.gather(*tasks, return_exceptions=True)
+    results      = await asyncio.gather(*tasks, return_exceptions=True)
     all_articles = [a for r in results if isinstance(r, list) for a in r]
 
-    existing_ids  = {a['id'] for a in db.get_latest_articles(limit=500)}
-    new_articles  = [a for a in all_articles if a['id'] not in existing_ids]
+    existing_ids = {a['id'] for a in db.get_latest_articles(limit=500)}
+    new_articles = [a for a in all_articles if a['id'] not in existing_ids]
+
+    _last_ingest_at = datetime.now(timezone.utc)
 
     if not new_articles:
         _emit_status('idle: Feed up to date — no new articles')
         return
 
-    _emit_status(f'scoring: Rule-scoring {len(new_articles)} new articles…')
+    _emit_status(f'scoring: Hybrid-scoring {len(new_articles)} new articles…')
     for article in new_articles:
         article.update(rule_score(article))
 
