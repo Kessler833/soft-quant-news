@@ -4,6 +4,9 @@ const API_CAPS = [
   { id: 'alpaca',  name: 'Alpaca',   rpm: 200, rpd: null, color: 'var(--text-primary)',   note: 'Data stream' },
 ]
 
+const DEFAULT_OLLAMA_URL   = 'http://localhost:11434'
+const DEFAULT_OLLAMA_MODEL = 'gemma3:4b'
+
 let _synchroInitDone = false
 
 async function initSynchro() {
@@ -37,8 +40,8 @@ async function _synchroPushKeysToBackend() {
     await apiHealth({
       ...keys,
       ingest_interval_sec: rate.intervalSec || 90,
-      ollama_url:   keys.ollama_url   || '',
-      ollama_model: keys.ollama_model || '',
+      ollama_url:   keys.ollama_url   || DEFAULT_OLLAMA_URL,
+      ollama_model: keys.ollama_model || DEFAULT_OLLAMA_MODEL,
     })
     console.log('[synchro] Keys auto-pushed to backend on launch.')
   } catch (e) {
@@ -49,8 +52,8 @@ async function _synchroPushKeysToBackend() {
         await apiHealth({
           ...k,
           ingest_interval_sec: 90,
-          ollama_url:   k.ollama_url   || '',
-          ollama_model: k.ollama_model || '',
+          ollama_url:   k.ollama_url   || DEFAULT_OLLAMA_URL,
+          ollama_model: k.ollama_model || DEFAULT_OLLAMA_MODEL,
         })
       } catch (_) {}
     }, 3000)
@@ -65,8 +68,8 @@ function _synchroLoadFields() {
   _set('key-finnhub',       keys.finnhub_key   || '')
   _set('key-newsapi',       keys.newsapi_key   || '')
   _set('key-base-url',      keys.base_url      || '')
-  _set('key-ollama-url',    keys.ollama_url    || 'http://localhost:11434')
-  _set('key-ollama-model',  keys.ollama_model  || 'llama3')
+  _set('key-ollama-url',    keys.ollama_url    || DEFAULT_OLLAMA_URL)
+  _set('key-ollama-model',  keys.ollama_model  || DEFAULT_OLLAMA_MODEL)
   if (rate.from)  _set('rate-from',  rate.from)
   if (rate.until) _set('rate-until', rate.until)
   if (rate.alwaysOn !== undefined) {
@@ -155,8 +158,8 @@ async function _rateApply() {
     await apiHealth({
       ...keys,
       ingest_interval_sec: intervalSec,
-      ollama_url:   keys.ollama_url   || '',
-      ollama_model: keys.ollama_model || '',
+      ollama_url:   keys.ollama_url   || DEFAULT_OLLAMA_URL,
+      ollama_model: keys.ollama_model || DEFAULT_OLLAMA_MODEL,
     })
     _synchroShowSaveMsg(`Schedule applied \u2014 ingest every ${intervalSec}s.`, 'success')
   } catch (e) {
@@ -175,9 +178,8 @@ async function _synchroSave() {
     finnhub_key:         _get('key-finnhub'),
     newsapi_key:         _get('key-newsapi'),
     base_url:            _get('key-base-url'),
-    // preserve ollama values from cache if inputs are empty
-    ollama_url:          _get('key-ollama-url')   || existing.ollama_url   || 'http://localhost:11434',
-    ollama_model:        _get('key-ollama-model') || existing.ollama_model || 'llama3',
+    ollama_url:          _get('key-ollama-url')   || existing.ollama_url   || DEFAULT_OLLAMA_URL,
+    ollama_model:        _get('key-ollama-model') || existing.ollama_model || DEFAULT_OLLAMA_MODEL,
     ingest_interval_sec: rate.intervalSec || 90,
   }
   QuantCache.saveApi(apiKeys)
@@ -191,8 +193,8 @@ async function _synchroSave() {
 }
 
 async function _synchroSaveOllama() {
-  const url   = _get('key-ollama-url')   || 'http://localhost:11434'
-  const model = _get('key-ollama-model') || 'llama3'
+  const url   = _get('key-ollama-url')   || DEFAULT_OLLAMA_URL
+  const model = _get('key-ollama-model') || DEFAULT_OLLAMA_MODEL
   const existing = QuantCache.loadApiKeys()
   QuantCache.saveApi({ ...existing, ollama_url: url, ollama_model: model })
   try {
@@ -253,7 +255,7 @@ function _keyCheck(keyName) {
 }
 
 function _ollamaCheck() {
-  const url = (QuantCache.getApiKey('ollama_url') || 'http://localhost:11434').replace(/\/$/, '')
+  const url = (QuantCache.getApiKey('ollama_url') || DEFAULT_OLLAMA_URL).replace(/\/$/, '')
   return fetch(url + '/api/tags', { method: 'GET' })
     .then(r => r.ok ? 'Running' : 'Offline')
     .catch(() => 'Offline')
